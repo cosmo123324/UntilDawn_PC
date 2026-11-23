@@ -90,8 +90,8 @@ static int ud_exit_click(void *window, int x, int y, int released) {
         if ((i64)w * sh > (i64)h * sw) {
             if (g_disp.fill) sh = (int)((i64)h * sw / w);
             else dw = (int)((i64)h * sw / sh);
-        } else if (g_disp.fill) sw = (int)((i64)w * sh / h);
-        else dh = (int)((i64)w * sh / sw);
+        } else if (!g_disp.fill) dh = (int)((i64)w * sh / sw);
+        /* In narrow fill mode the Scaleform viewport maps its full width to the client. */
         x -= (w - dw) / 2;
         y -= (h - dh) / 2;
         if (dw > 0 && dh > 0 && x >= 0 && x < dw && y >= 0 && y < dh) {

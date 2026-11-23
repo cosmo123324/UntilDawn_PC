@@ -1072,7 +1072,10 @@ static void plat_fullscreen_enter(void) {
         return;
     }
     PlatDisplayMode chosen = original;
-    if (g_disp.fullscreen_w > 0 &&
+    /* A render resolution with a different aspect ratio would change the
+       panel's output geometry and can trigger stretching by the display driver. */
+    if (g_disp.fullscreen_w > 0 && g_disp.fullscreen_h > 0 &&
+        (u64)original.width * (u32)g_disp.fullscreen_h == (u64)original.height * (u32)g_disp.fullscreen_w &&
         (original.width != (u32)g_disp.fullscreen_w || original.height != (u32)g_disp.fullscreen_h)) {
         int best = 0x7fffffff;
         for (u32 i = 0; ; i++) {

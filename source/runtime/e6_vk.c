@@ -7739,6 +7739,25 @@ static void vkr_draw_body(const char *kind, u32 count, int indexed, u32 first_in
     if (x1 <= x0 || y1 <= y0) { vk_skip("empty scissor"); return; }
     VkRect2D sc = {{x0, y0}, {(u32)(x1 - x0), (u32)(y1 - y0)}};
     if (drs && !g_rs_phys) rs_rect(&sc, prw, prh);   /* t196 */
+    /* In fill mode a narrow output crops the sides. Fit full-width Scaleform
+       draws into the visible width and leave their vertical placement intact. */
+    if (g_disp.fill && rw == 1920 && rh >= 1080 &&
+        2 * xs == (float)(g_rs_phys ? prw : rw) &&
+        (RS_UI_ADDR((u64)g_shr[SH_PGM_LO_PS] << 8) || RS_UI_ADDR((u64)g_shr[SH_PGM_LO_VS] << 8)) &&
+        !RS_UI_ADDR((u64)g_ctx[CTX_CB_COLOR0_BASE] << 8)) {
+        u32 picture_height = drs ? rs_up(1080) : 1080;
+        u32 width = presentation_crop_width(prw, picture_height, V.ext.width, V.ext.height);
+        if (width < prw) {
+            u32 margin = (prw - width) / 2;
+            float scale = (float)width / (float)prw;
+            vpt.x = vpt.x * scale + (float)margin;
+            vpt.width *= scale;
+            u64 left = (u64)sc.offset.x * width;
+            u64 right = left + (u64)sc.extent.width * width;
+            sc.offset.x = (i32)(margin + left / prw);
+            sc.extent.width = (u32)((right + prw - 1) / prw - left / prw);
+        }
+    }
     {   /* t116: a tessellated / GS draw also depends on its first compute pass (and the GS pass) */
         VPipe *cg0 = (tess || gsd) ? g_chain[0] : 0, *cg1 = gsd ? g_chain[1] : 0;
         if (vk_guard_failed(cg0) || vk_guard_failed(cg1)) { vk_skip("tessellation / geometry pass pipeline failed"); return; }
@@ -9420,12 +9439,8 @@ static void vkr_flip_body(u64 addr, u32 w, u32 h) {
         u32 sample_w = scaled_w, sample_h = scaled_h;
         if (g_disp.fill) {
             dw = V.ext.width; dh = V.ext.height;
-            if ((u64)dw * scaled_h < (u64)dh * scaled_w)
-                sample_w = (u32)((u64)dw * scaled_h / dh);
-            else if ((u64)dw * scaled_h > (u64)dh * scaled_w)
-                sample_h = (u32)((u64)dh * scaled_w / dw);
-            if (!sample_w) sample_w = 1;
-            if (!sample_h) sample_h = 1;
+            sample_w = presentation_crop_width(scaled_w, scaled_h, dw, dh);
+            sample_h = presentation_crop_width(scaled_h, scaled_w, dh, dw);
         }
         u32 sx = (scaled_w - sample_w) / 2, sy = (scaled_h - sample_h) / 2;
         int cropped = sample_w != scaled_w || sample_h != scaled_h;

@@ -199,7 +199,7 @@ static void ud_launcher_init(void *window) {
     int display = g_uds.fullscreen ? 2 : g_uds.seen_mode ? g_uds.borderless : 1;
     SendDlgItemMessageW(window, UD_DISPLAY, UD_SELECT, display, 0);
     ud_combo_add(window, UD_PRESENT, u"Imagem inteira (pode ter barras)");
-    ud_combo_add(window, UD_PRESENT, u"Preencher (corte nas bordas)");
+    ud_combo_add(window, UD_PRESENT, u"Preencher (interface ajustada)");
     SendDlgItemMessageW(window, UD_PRESENT, UD_SELECT, g_uds.fill, 0);
     SetDlgItemInt(window, UD_LOD, g_uds.lod_distance, 0);
 }

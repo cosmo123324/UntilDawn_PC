@@ -191,7 +191,9 @@ Double-click **`UntilDawn.exe`**.
   path. Choose the folder that contains `eboot.bin`. A fresh installation shows an empty path field.
 - **Display.** Choose a framed window, a borderless window at the desktop resolution, or fullscreen with a
   temporary monitor mode. Alt+Enter switches between a window and the selected full-screen mode. The picture
-  is rendered at 16:9. Select fit to keep the whole image, or fill to crop its edges to the size of the window.
+  is rendered at 16:9. Select fit to keep the whole image, or fill to crop the scene to the size of the window.
+  On narrower screens such as 16:10, fill adjusts the width of the on-screen interface so prompts and text
+  remain visible. The game's own cinematic bars may still appear.
 
 The program creates these folders next to `UntilDawn.exe` when it runs:
 
@@ -218,11 +220,11 @@ The file is created with these defaults if it is missing. Delete it to restore t
 | `lod_distance` | `100` | Experimental viewport LOD defaults in percent, from `100` to `150`. At `100`, the game uses its original defaults. Scene-specific culling remains active. |
 | `frame_rate_limit` | `60` | `30`, `60`, `120`, `240` or `uncapped` (also `0`). Uncapped still stops at 240 FPS so that physics and cloth keep real time; a number above 240 counts as 240 (other numbers up to 240, e.g. `144`, also work). Independent of `optimised_rendering`. |
 | `optimised_rendering` | `1` | **Optimised Rendering (Fast Mode).** `1` = on: the game starts its next frame while the graphics card finishes the previous one, with safety checks that keep the game's memory consistent - the same picture, clearly faster. `0` = off. It does not change the frame-rate limit. If you see a problem, try `0` and report whether it made a difference. New in v0.4.0. |
-| `display_mode` | `borderless` | `windowed` has a frame. `borderless` fills the monitor at the desktop resolution. `fullscreen` temporarily changes the monitor mode while the game has focus, using the selected resolution when the monitor supports it. Alt+Enter switches between the window and full-screen modes. |
+| `display_mode` | `borderless` | `windowed` has a frame. `borderless` fills the monitor at the desktop resolution. `fullscreen` can switch to the selected resolution if the monitor supports it and it matches the desktop's aspect ratio. Alt+Enter switches between the window and full-screen modes. |
 | `monitor` | `auto` | `auto` = the primary monitor, or a number from the monitor list in `Logs\UntilDawn.log`. New in v0.4.0. |
 | `window_width` / `window_height` | `1280` / `720` | Window size in windowed mode. The window can also be resized with the mouse (the size is saved). |
 | `render_resolution` | `auto` | `auto` fits the render resolution to the monitor or window. The launcher lists the monitor's native resolution and common sizes including 16:10. The chosen size targets the window or fullscreen mode and the renderer fits a 16:9 image, with a 1920x1080 minimum and a limit based on available video memory. Borderless uses the desktop's mode. |
-| `presentation` | `fit` | `fit` keeps the whole rendered image, including any bars needed to preserve its shape. `fill` covers the window by cropping the edges of the image. |
+| `presentation` | `fit` | `fit` keeps the whole rendered image, with bars as needed to preserve its shape. `fill` crops the scene to cover the window and fits the on-screen interface to narrower screens. |
 | `renderer_thread` | `1` | `1` = the renderer runs on its own thread, alongside the game (since 0.1.4; faster). `0` = the renderer runs on the game's thread, as in 0.1.3. Try `0` if the game freezes or stutters, and report whether it helped. It does not prevent the crashes caused by overwritten game memory. Not present in settings files from 0.1.3 and older; the default then applies. |
 | `gpu` | `auto` | Which graphics card to use: `auto` (normally the dedicated one), a number from the GPU list in `Logs\UntilDawn.log` (`GPU 0: …`, `GPU 1: …`), or part of a card's name, e.g. `gpu = 5050` or `gpu = Radeon`. New in 0.2.0. |
 | `present_mode` | `auto` | How frames are shown: `auto`, `fifo` (in step with the display), `mailbox` or `immediate`. `auto` uses `mailbox` and switches to `fifo` by itself if frames take very long to reach the screen (seen on some laptops with two GPUs). New in 0.2.0. |

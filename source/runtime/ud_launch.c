@@ -193,7 +193,7 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; 1440p, 2160p or WIDTHxHEIGHT, e.g. 1080p if the game runs too slowly at the monitor's resolution; the picture is\r\n"
     "; then scaled to the monitor. Restart after changing.\r\n"
     "render_resolution = auto\r\n"
-    "; fit keeps the whole picture; fill crops the edges to cover the window without stretching.\r\n"
+    "; fit keeps the whole picture; fill crops the scene and fits the interface to narrower screens.\r\n"
     "presentation = fit\r\n"
     "\r\n"
     "; 1 = the renderer runs on its own thread, alongside the game (faster in most scenes).\r\n"
@@ -613,7 +613,7 @@ static void disp_setup(int replay) {
     if ((i64)ow * 9 > (i64)oh * 16) { ph = oh; pw = (int)(((i64)oh * 16 + 4) / 9); } else { pw = ow; ph = (int)(((i64)ow * 9 + 8) / 16); }
     say("display: "); say(g_disp.fullscreen ? "fullscreen on monitor " : g_disp.borderless ? "borderless on monitor " : "windowed on monitor "); say_dec(g_disp.mon + 1); say(", "); say_dec(ow); say("x"); say_dec(oh);
     say(", fitted picture area "); say_dec(pw); say("x"); say_dec(ph);
-    say(g_disp.fill ? " (presentation: fill, crop to the screen)" : " (presentation: fit, keep the whole picture)"); say("\n");
+    say(g_disp.fill ? " (presentation: fill, fit the interface to narrower screens)" : " (presentation: fit, keep the whole picture)"); say("\n");
     if (forced) { say("display: internal resolution from --render-scale "); say_dec(g_rs_pct); say(" (developer switch)\n"); return; }
     int th = ph; if (rr_mode == 2) th = rr_h < (rr_w * 9 + 8) / 16 ? rr_h : (rr_w * 9 + 8) / 16;
     int ci = disp_pick(th), c0 = ci;

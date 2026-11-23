@@ -89,6 +89,13 @@ static const char *ud_game_title_id(void);
 static int ud_game_language(void);
 static int ud_exit_menu_open(void);
 
+static u32 presentation_crop_width(u32 width, u32 height, u32 output_width, u32 output_height) {
+    if (!output_width || !output_height || (u64)output_width * height >= (u64)output_height * width)
+        return width;
+    u32 visible = (u32)((u64)output_width * height / output_height);
+    return visible ? visible : 1;
+}
+
 /* SELF -> segments. Returns 0 on success; fills m->ph and maps data. */
 static u8 *read_file(const char *path, u64 *size) { return (u8 *)plat_read_file(path, size); }
 
