@@ -9151,7 +9151,9 @@ static void skp_draw(u8 *px) {
                 else { col[0] = col[1] = col[2] = 48;
                     float a = fx + fy, b = fx - fy; if (a < 0) a = -a; if (b < 0) b = -b;
                     float lim = R * 0.48f;
-                    if ((a < 3.2f || b < 3.2f) && fx < lim && fx > -lim && fy < lim && fy > -lim) { col[0] = 124; col[1] = 178; col[2] = 232; } } }
+                    if (g_opt_xbox_prompts) {
+                        if (xbox_glyph_coverage(XBOX_A, (u32)(fx + R), (u32)(fy + R), 44, 44)) { col[0] = 86; col[1] = 220; col[2] = 126; }
+                    } else if ((a < 3.2f || b < 3.2f) && fx < lim && fx > -lim && fy < lim && fy > -lim) { col[0] = 124; col[1] = 178; col[2] = 232; } } }
             acc[0] += col[0]; acc[1] += col[1]; acc[2] += col[2]; }
         (void)nin; q[0] = (u8)(acc[0] / 16); q[1] = (u8)(acc[1] / 16); q[2] = (u8)(acc[2] / 16);
     }

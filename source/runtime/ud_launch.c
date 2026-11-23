@@ -128,6 +128,7 @@ typedef struct {
     int seen_fast, seen_gpuopt, seen_fps, seen_disp;   /* the file has such a line */
     int fps_asked;           /* frame_rate_limit as written (before the 240 ceiling) */
     int fresh;               /* rc3: the file was written with the defaults at this start (its values are the defaults, not the player's) */
+    int xbox_prompts;
 } UdSettings;
 static UdSettings g_uds = {"", 60, 0, 1280, 720, 0, 1, "", 0, 512, 1, 1, 1, 0, 0};
 static int g_ud_release;     /* started as the player-facing program (no command-line arguments) */
@@ -153,6 +154,9 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; Folder with the original game files (your own CUSA02636 or CUSA00359 install with the 01.03 update).\r\n"
     "; Empty = the Game folder next to UntilDawn.exe.\r\n"
     "game_dir =\r\n"
+    "\r\n"
+    "; button_prompts = xbox displays A/B/X/Y and RT in supported prompts. Restart after changing.\r\n"
+    "button_prompts = playstation\r\n"
     "\r\n"
     "; Frame-rate limit: 30, 60, 120, 240 or uncapped (uncapped can also be written as 0). 60 is the default.\r\n"
     "; uncapped still stops at 240 frames a second, so that physics and cloth keep real time; a number above 240\r\n"
@@ -290,6 +294,7 @@ static void ud_parse_ini(char *t) {
         char *eq = line; while (*eq && *eq != '=') eq++; if (!*eq) continue;
         *eq = 0; char *v = eq + 1; ud_trim(line); while (*v == ' ' || *v == '\t') v++; ud_trim(v);
         if (ud_key_is(line, "game_dir")) { int n = str_len(v); if (n >= (int)sizeof g_uds.game_dir) n = sizeof g_uds.game_dir - 1; mem_copy(g_uds.game_dir, v, (u64)n); g_uds.game_dir[n] = 0; }
+        else if (ud_key_is(line, "button_prompts")) g_uds.xbox_prompts = ud_key_is(v, "xbox");
         else if (ud_key_is(line, "frame_rate_limit")) {   /* w16_rel: 30 / 60 / 120 / 240 / uncapped (= 0); any other number up to 240 still works, above 240 counts as 240 */
             int x = ud_atoi(v); if (ud_key_is(v, "uncapped") || ud_key_is(v, "unlimited") || ud_key_is(v, "none") || ud_key_is(v, "off")) x = 0;
             else if (v[0] == '-') x = 0;   /* (a negative number: uncapped, as before) */

@@ -25,6 +25,8 @@ needed).
 
 Includes Xbox controllers and virtual pads made by DS4Windows or Steam Input. **Vibration works.**
 
+Set `button_prompts = xbox` in `Config/settings.ini` and restart to display A, B, X, Y and RT in supported in-game prompts. Use `button_prompts = playstation` for the original prompt style.
+
 | Xbox | PS4 |
 | --- | --- |
 | A | Cross |

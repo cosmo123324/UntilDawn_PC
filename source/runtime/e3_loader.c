@@ -82,6 +82,9 @@ typedef struct Module {
 static Module g_eboot, g_prx;
 static int g_prx_loaded;
 static const char *g_game_dir;
+static int g_opt_xbox_prompts;
+enum { XBOX_A, XBOX_B, XBOX_X, XBOX_Y, XBOX_RT };
+static u8 xbox_glyph_coverage(u32 button, u32 x, u32 y, u32 w, u32 h);
 static const char *ud_game_title_id(void);
 static int ud_game_language(void);
 
@@ -1564,6 +1567,7 @@ static void patch_sound_trace(Module *m) {
    --trace-movies (diagnostic) logs instances, their state bytes when they change, every engine call into a movie and
    every movie file loaded -> captures\movie_trace.txt. */
 #include "e6_skipprompt.c"
+#include "ud_xbox_prompts.c"
 #define SFI_MAX 64
 /* kind: 1 frontend, 2 MovieLegal, 3 VideoOverlayText, 4 Subtitles. t107j: host = the movie carries our prompt (it said so
    through DoTextLookup, or it is a host movie we changed); name = the movie file, from the component's resource */
@@ -1804,9 +1808,30 @@ static int skp_img_index(u64 url) {
 }
 static void skp_img_probe(u64 *P, u32 id) {
     u64 *g = P + 32; int k = skp_img_index(g[0]);   /* r15 */
-    if (k < 0 || !g_skp_gnf[k]) return;
-    g[14] = id == 1 ? (u64)g_skp_gnf[k] : (u64)g_skp_gnf_len[k];   /* rax */
-    if (id == 2 && g_opt_trace_movies) { say("  skip prompt: picture "); say(k ? SKP_IMG_CROSS : SKP_IMG_CIRCLE); say(" given to the engine\n"); }
+    if (k >= 0 && g_skp_gnf[k]) {
+        g[14] = id == 1 ? (u64)g_skp_gnf[k] : (u64)g_skp_gnf_len[k];   /* rax */
+        if (id == 2 && g_opt_trace_movies) { say("  skip prompt: picture "); say(k ? SKP_IMG_CROSS : SKP_IMG_CIRCLE); say(" given to the engine\n"); }
+    }
+    if (!g_opt_xbox_prompts || id != 1 || !vis_ptr_ok(g[14])) return;
+    const char *name = "frontend_if9.gnf";
+    char url[300];
+    if (k != 1) {
+        if (!vis_is_str(g[0], url, sizeof url)) return;
+        name = url;
+        for (const char *p = url; *p; p++) if (*p == '/' || *p == '\\') name = p + 1;
+    }
+    for (u64 i = 0; i < sizeof g_xbox_textures / sizeof g_xbox_textures[0]; i++) {
+        XboxPrompt *entry = &g_xbox_textures[i];
+        if (!ud_key_is(name, entry->name)) continue;
+        mv_lock();
+        if (!entry->texture && (dump_readable(g[14], 48) || plat_readable(g[14], 48))) {
+            entry->texture = xbox_make_texture((const u8 *)g[14], entry->size, entry->button);
+            if (entry->texture) { say("  Xbox prompt: "); say(entry->name); say("\n"); }
+        }
+        if (entry->texture) g[14] = (u64)entry->texture;
+        mv_unlock();
+        break;
+    }
 }
 static void patch_movies(Module *m) {
     static const u8 e1[5] = {0xc5, 0xfa, 0x11, 0x45, 0xdc};               /* vmovss [rbp-0x24],xmm0 */
@@ -3483,6 +3508,7 @@ static int ud_player_start(int *pargc, char ***pargv) {
     (void)fpsbuf;
     int n = 0;
     av[n++] = "UntilDawn.exe"; av[n++] = game; av[n++] = "--main"; av[n++] = "--frames"; av[n++] = "2000000000"; av[n++] = "--timeout"; av[n++] = "0";
+    if (g_uds.xbox_prompts) av[n++] = "--xbox-prompts";
     av[n++] = "--watch-heap"; av[n++] = "--lump-repair";   /* the two containments every good test run used (STATUS 40, 47); the skin check is on by default (STATUS 68) */
     if (!g_uds.gpu_coherence) av[n++] = "--no-gpu-coherence";   /* t165x */
     if (g_uds.halloween_hunt) av[n++] = "--halloween-hunt";   /* t167 */
@@ -3817,6 +3843,7 @@ int e3_main(int argc, char **argv) {
         else if (str_eq(argv[i], "--padded-targets")) g_opt_padded_targets = 1;   /* t191: targets at their padded size, region copies for every read (as before) */
         else if (str_eq(argv[i], "--tex-audit")) { g_opt_tex_audit = 1; if (i + 1 < argc && str_eq(argv[i + 1], "fix")) { g_opt_tex_audit = 2; i++; } }   /* t135 diagnostic */
         else if (str_eq(argv[i], "--trace-movies")) g_opt_trace_movies = 1;   /* diagnostic: STATUS 86 */
+        else if (str_eq(argv[i], "--xbox-prompts")) g_opt_xbox_prompts = 1;
         else if (str_eq(argv[i], "--watch-heap")) g_hw_on = 1;
         else if (str_eq(argv[i], "--watch-writes")) g_hw_dr_on = 1;   /* STATUS 69-70: hardware watchpoints on reported page starts (unsafe: traps clobber the red zone; t120: true damage only, 300 traps at most) */
         else if (str_eq(argv[i], "--sentinel-ops") && i + 1 < argc) { g_sent_on = 1; g_sent_mask = (u32)str_to_u64(argv[++i]); }   /* t124 */
@@ -4235,7 +4262,7 @@ int e3_main(int argc, char **argv) {
     patch_heap_slots(&g_eboot);   /* t130 */
     patch_heap_slot_reuse(&g_eboot);   /* t131 */
     if (!g_opt_no_movie_skip) patch_movie_skip(&g_eboot);
-    if (!g_opt_no_movie_skip || g_opt_trace_movies) patch_movies(&g_eboot);
+    if (!g_opt_no_movie_skip || g_opt_trace_movies || g_opt_xbox_prompts) patch_movies(&g_eboot);
     if (g_opt_trace_ui) patch_ui_trace(&g_eboot);
     if (g_opt_trace_sound) patch_sound_trace(&g_eboot);   /* t132 */
     if (relocate(&g_eboot, 1)) say("  (continuing despite unresolved imports)\n");
