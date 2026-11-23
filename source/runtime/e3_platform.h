@@ -1027,7 +1027,7 @@ static PlatMon g_mon[8]; static int g_nmon;
 static struct {
     int on;                    /* the display system is in charge of the window */
     int borderless;            /* request, then the current mode */
-    int fullscreen, fullscreen_w, fullscreen_h;
+    int fullscreen, fullscreen_w, fullscreen_h, fill;
     int mon_req;               /* 0 = auto (primary), else 1-based number */
     int cw_req, ch_req;        /* windowed: client size wanted */
     int have_pos; i32 px, py;  /* windowed: saved place of the window (outer top-left) */
@@ -1790,7 +1790,7 @@ static void plat_window_open(void) {}
 static void plat_win_report(void) {}
 typedef struct { void *h; i32 x, y, w, ht, wx, wy, ww, wh; int primary; char name[32]; } PlatMon;
 static PlatMon g_mon[8]; static int g_nmon;
-static struct { int on, borderless, fullscreen, fullscreen_w, fullscreen_h, mon_req, cw_req, ch_req, have_pos; i32 px, py; int sim_w, sim_h, mon; i32 x, y; int w, h, out_w, out_h, dpi_mode; volatile int toggle_req, refit, changed; } g_disp;
+static struct { int on, borderless, fullscreen, fullscreen_w, fullscreen_h, fill, mon_req, cw_req, ch_req, have_pos; i32 px, py; int sim_w, sim_h, mon; i32 x, y; int w, h, out_w, out_h, dpi_mode; volatile int toggle_req, refit, changed; } g_disp;
 static void (*g_disp_changed_cb)(void);
 static int plat_disp_resolve(void) { return 0; }
 static void plat_timer_1ms(void) {}

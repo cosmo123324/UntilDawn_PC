@@ -23,6 +23,8 @@ GetDlgItemTextW
 SetDlgItemTextW
 SendDlgItemMessageW
 SendMessageW
+GetDlgItem
+SetFocus
 GetSystemMetrics
 SetProcessDPIAware
 AdjustWindowRect
@@ -41,3 +43,9 @@ SetWindowLongPtrA
 GetForegroundWindow
 EnumDisplaySettingsExA
 ChangeDisplaySettingsExA
+FillRect
+DrawTextW
+DrawFocusRect
+GetWindowTextW
+MapDialogRect
+InvalidateRect

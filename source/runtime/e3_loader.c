@@ -1340,9 +1340,8 @@ static void mskip_restore(void) {
    timeline, not by the movie's end - so after a skip it played on over the gameplay. Every successful
    AK::SoundEngine::PostEvent (eboot+0xa1630; its single epilogue at +0xa1726 returns the playing id in eax, with the
    event in rbx ([rbx+0x10] = event id) and the queued message in r15 ([r15+8] = game object)) is recorded with its
-   flip; a skip stops (AK::SoundEngine::StopPlayingID, eboot+0xaa7f0, 300 ms linear fade) the events on the global game
-   object posted from half a second before that movie started (each listed in the log). --no-skip-audio: the old
-   behaviour. */
+   flip. At a skip, stop only the verified cue for that movie (AK::SoundEngine::StopPlayingID,
+   eboot+0xaa7f0, 300 ms linear fade). Global Wwise events also drive pause/resume, game transitions and ambience. */
 typedef struct { u32 pid, ev; u64 obj, flip; } SndRec;
 static SndRec g_snd_rec[1024]; static volatile u32 g_snd_nrec; static volatile int g_snd_rlock;
 static u64 g_snd_movie_flip; static int g_opt_no_skip_audio, g_snd_post_on; static u64 g_snd_stopped, g_snd_posts;
@@ -1357,20 +1356,23 @@ static void snd_post_exit_probe(u64 *P, u32 id) {
 }
 static void snd_stop_skipped(const char *name) {
     if (g_opt_no_skip_audio || !g_snd_post_on || !g_snd_movie_flip) return;
+    /* Set_State_MS_Act1_2_Montage_Trimmed_State_01, the bus-ride soundtrack cue.
+       Global events seen alongside it include Pause_Menu_End and Play_fade_to_black_generic. */
+    u32 cue = str_has_ci(name, "/Intro_BusRide.bk2") ? 0x2a3ac434u : 0;
+    if (!cue) return;
     void (SYSV *stop)(u32, u32, u32) = (void (SYSV *)(u32, u32, u32))(g_eboot.base + 0xaa7f0);
     u64 from = g_snd_movie_flip > 30 ? g_snd_movie_flip - 30 : 0; u32 n = 0, kept = 0;
-    /* only the events on the global (2D) game object - music and other sound not placed in the world, as
-       WWiseSoundSystem::PostGlobalSoundEvent posts them ([eboot+0xd9323a0+0x10]); sound emitters of the level behind
-       the movie (ambience that may have started while it played) keep playing */
+    /* WWiseSoundSystem::PostGlobalSoundEvent uses this 2D game object. */
     u64 gobj = 0; atm_rd((u64)g_eboot.base + 0xd9323a0 + 0x10, &gobj, 8);
     static u32 pids[1024], evs[1024]; static u64 objs[1024]; static u8 hit[1024]; u32 np = 0;
     while (__atomic_exchange_n(&g_snd_rlock, 1, __ATOMIC_ACQUIRE)) { }
     u32 cnt = g_snd_nrec < 1024 ? g_snd_nrec : 1024;
-    for (u32 k = 0; k < cnt; k++) { SndRec *r = &g_snd_rec[(g_snd_nrec - 1 - k) & 1023]; if (r->flip < from) break; if (np < 1024) { pids[np] = r->pid; evs[np] = r->ev; objs[np] = r->obj; hit[np] = gobj && r->obj == gobj; np++; } }
+    for (u32 k = 0; k < cnt; k++) { SndRec *r = &g_snd_rec[(g_snd_nrec - 1 - k) & 1023]; if (r->flip < from) break; if (np < 1024) { pids[np] = r->pid; evs[np] = r->ev; objs[np] = r->obj; hit[np] = gobj && r->obj == gobj && r->ev == cue; np++; } }
     __atomic_store_n(&g_snd_rlock, 0, __ATOMIC_RELEASE);
     for (u32 k = 0; k < np; k++) { if (hit[k]) { stop(pids[k], 300, 4 /* linear */); n++; } else kept++; }
     g_snd_stopped += n;
-    say("  movie skipped (t135): stopped "); say_dec(n); say(" global sounds posted since the movie started (flip "); say_dec((i64)from); say("), left "); say_dec(kept); say(" placed in the world: "); say(name); say("\n");
+    say("  movie skipped: stopped "); say_dec(n); say(" verified soundtrack cues, kept "); say_dec(kept);
+    say(" other audio events since flip "); say_dec((i64)from); say(": "); say(name); say("\n");
     for (u32 k = 0; k < np && k < 40; k++) { say("    "); say(hit[k] ? "stopped" : "left"); say(" event "); say_hex(evs[k]); say(" playing id "); say_hex(pids[k]); say(" object "); say_hex(objs[k]); say("\n"); }
 }
 /* eboot+0x114630b, in the movie start function (r15 = the SmgMoviePlayer about to start a movie on its player) */
@@ -1485,7 +1487,7 @@ static void patch_movie_skip(Module *m) {
         if (ok) { u8 *q = m->base + ve, *st2 = g_stub_w; g_stub_w = probe_emit_stub(g_stub_w, 1, ep, 15, q + 15, (void *)&snd_post_exit_probe);
             q[0] = 0xe9; *(i32 *)(q + 1) = (i32)(st2 - (q + 5)); for (int k = 5; k < 15; k++) q[k] = 0xcc;
             if (!g_snd_post_on) g_snd_post_on = 1;
-            say("  skipped movies stop their sound (t135): Wwise events posted since the movie started are stopped at a skip\n"); }
+            say("  skip audio: stop verified soundtrack cues and preserve other Wwise events\n"); }
         else if (!g_opt_no_skip_audio) say("  skip audio: the Wwise code does not match this eboot - not applied\n");
     }
 }
@@ -1592,6 +1594,7 @@ static void patch_sound_trace(Module *m) {
    every movie file loaded -> captures\movie_trace.txt. */
 #include "e6_skipprompt.c"
 #include "ud_xbox_prompts.c"
+#include "ud_xbox_text.c"
 #define SFI_MAX 64
 /* kind: 1 frontend, 2 MovieLegal, 3 VideoOverlayText, 4 Subtitles. t107j: host = the movie carries our prompt (it said so
    through DoTextLookup, or it is a host movie we changed); name = the movie file, from the component's resource */
@@ -4299,6 +4302,7 @@ int e3_main(int argc, char **argv) {
     patch_heap_slot_reuse(&g_eboot);   /* t131 */
     if (!g_opt_no_movie_skip) patch_movie_skip(&g_eboot);
     if (!g_opt_no_movie_skip || g_opt_trace_movies || g_opt_xbox_prompts) patch_movies(&g_eboot);
+    if (g_opt_xbox_prompts) patch_xbox_text(&g_eboot);
     if (g_opt_trace_ui) patch_ui_trace(&g_eboot);
     if (g_opt_trace_sound) patch_sound_trace(&g_eboot);   /* t132 */
     if (relocate(&g_eboot, 1)) say("  (continuing despite unresolved imports)\n");

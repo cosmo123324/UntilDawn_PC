@@ -9413,9 +9413,22 @@ static void vkr_flip_body(u64 addr, u32 w, u32 h) {
     vkCmdPipelineBarrier(V.cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &src_ready, 0, 0, 1, &b);
     if (src) {
         u32 sw = w < src->w ? w : src->w, sh = h < src->h ? h : src->h;
-        /* letterbox to the window, keeping the aspect ratio */
+        /* Fit the picture or crop the center of the source to fill the window. */
         u32 dw = V.ext.width, dh = (u32)((u64)V.ext.width * sh / sw);
         if (dh > V.ext.height) { dh = V.ext.height; dw = (u32)((u64)V.ext.height * sw / sh); }
+        u32 scaled_w = RSV(src, sw), scaled_h = RSV(src, sh);
+        u32 sample_w = scaled_w, sample_h = scaled_h;
+        if (g_disp.fill) {
+            dw = V.ext.width; dh = V.ext.height;
+            if ((u64)dw * scaled_h < (u64)dh * scaled_w)
+                sample_w = (u32)((u64)dw * scaled_h / dh);
+            else if ((u64)dw * scaled_h > (u64)dh * scaled_w)
+                sample_h = (u32)((u64)dh * scaled_w / dw);
+            if (!sample_w) sample_w = 1;
+            if (!sample_h) sample_h = 1;
+        }
+        u32 sx = (scaled_w - sample_w) / 2, sy = (scaled_h - sample_h) / 2;
+        int cropped = sample_w != scaled_w || sample_h != scaled_h;
         i32 ox = (i32)(V.ext.width - dw) / 2, oy = (i32)(V.ext.height - dh) / 2;
         VkClearColorValue black = {{0, 0, 0, 1}};
         int lean_ = g_opt_present_lean && ox == 0 && oy == 0 && dw == V.ext.width && dh == V.ext.height;   /* w10_res (--present-lean): the picture covers the whole window: no clear (and no barrier between clear and blit) */
@@ -9426,14 +9439,14 @@ static void vkr_flip_body(u64 addr, u32 w, u32 h) {
         b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         b.oldLayout = b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         vkCmdPipelineBarrier(V.cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, 0, 0, 0, 1, &b); }
-        VkImageBlit bl = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{0, 0, 0}, {(i32)RSV(src, sw), (i32)RSV(src, sh), 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{ox, oy, 0}, {ox + (i32)dw, oy + (i32)dh, 1}}};   /* (t196: the scaled picture's own pixels) */
-        int boxed_ = g_opt_rs_down && g_rs_on && rs_box_blit(src->img, RSV(src, sw), RSV(src, sh), src->fmt, V.simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ox, oy, dw, dh);   /* w5 */
+        VkImageBlit bl = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{(i32)sx, (i32)sy, 0}, {(i32)(sx + sample_w), (i32)(sy + sample_h), 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{ox, oy, 0}, {ox + (i32)dw, oy + (i32)dh, 1}}};   /* (t196: the scaled picture's own pixels) */
+        int boxed_ = !cropped && g_opt_rs_down && g_rs_on && rs_box_blit(src->img, scaled_w, scaled_h, src->fmt, V.simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, ox, oy, dw, dh);   /* w5 */
         if (boxed_) g_n_rs_down++; else
         vkCmdBlitImage(V.cb, src->img, VK_IMAGE_LAYOUT_GENERAL, V.simg[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
         for (int k_ = 0; k_ < g_disp_tog_n; k_++) if (g_disp.on && g_flips == g_disp_tog_at[k_]) g_disp.toggle_req = 1;   /* tests: --display-toggle-at */
         { static u32 lw_, lh_; if (g_disp.on && (lw_ != V.ext.width || lh_ != V.ext.height)) { lw_ = V.ext.width; lh_ = V.ext.height;   /* w6_disp: at the start and whenever the window changes */
             say("    display: the picture "); say_dec(RSV(src, sw)); say("x"); say_dec(RSV(src, sh)); say(" is shown in "); say_dec(dw); say("x"); say_dec(dh); say(" at "); say_dec(ox); say(","); say_dec(oy); say(" of the "); say_dec(V.ext.width); say("x"); say_dec(V.ext.height);
-            say(g_disp.borderless ? " borderless window" : " window"); say(RSV(src, sw) == dw && RSV(src, sh) == dh ? ": pixel for pixel" : RSV(src, sw) > dw ? ": filtered down" : ": enlarged (linear)"); say(ox ? ", pillarbox" : oy ? ", letterbox" : ""); say(", flip "); say_dec((i64)g_flips); say("\n"); } }
+            say(g_disp.borderless ? " borderless window" : " window"); say(sample_w == dw && sample_h == dh ? ": pixel for pixel" : sample_w > dw ? ": filtered down" : ": enlarged (linear)"); say(cropped ? ", center crop" : ox ? ", pillarbox" : oy ? ", letterbox" : ""); say(", flip "); say_dec((i64)g_flips); say("\n"); } }
         if (rsl_on()) { vl("rsl FLIP source "); vl_x(src->addr); vl(" "); vl_d(src->w); vl("x"); vl_d(src->h); vl(" f"); vl_d(src->fmt); vl(src->rs ? " SCALED" : " plain"); vl(" -> "); vl_d(dw); vl("x"); vl_d(dh); vl("\n"); }
         src->r_ep = V.bar_ep + 1; src->use_seq = g_sub_seq + 1; src->last_use = V.frame;
         { static int once_; if (g_rs_on && !once_) { once_ = 1; say("    render scale: the picture "); say_dec(RSV(src, sw)); say("x"); say_dec(RSV(src, sh)); say(" is shown in "); say_dec(dw); say("x"); say_dec(dh);

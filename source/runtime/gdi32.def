@@ -6,3 +6,7 @@ SetTextColor
 SetBkMode
 SetBkColor
 PatBlt
+CreateSolidBrush
+DeleteObject
+SelectObject
+CreateFontW

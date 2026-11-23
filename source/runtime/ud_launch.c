@@ -130,7 +130,7 @@ typedef struct {
     int fresh;               /* rc3: the file was written with the defaults at this start (its values are the defaults, not the player's) */
     int xbox_prompts;
     int show_launcher, lod_distance;
-    int fullscreen;
+    int fullscreen, fill;
 } UdSettings;
 static UdSettings g_uds = {"", 60, 0, 1280, 720, 0, 1, "", 0, 512, 1, 1, 1, 0, 0};
 static int g_ud_release;     /* started as the player-facing program (no command-line arguments) */
@@ -193,6 +193,8 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; 1440p, 2160p or WIDTHxHEIGHT, e.g. 1080p if the game runs too slowly at the monitor's resolution; the picture is\r\n"
     "; then scaled to the monitor. Restart after changing.\r\n"
     "render_resolution = auto\r\n"
+    "; fit keeps the whole picture; fill crops the edges to cover the window without stretching.\r\n"
+    "presentation = fit\r\n"
     "\r\n"
     "; 1 = the renderer runs on its own thread, alongside the game (faster in most scenes).\r\n"
     "; 0 = the renderer runs on the game's thread, as in version 0.1.3 - try this if the game crashes or stutters.\r\n"
@@ -389,6 +391,7 @@ static void ud_parse_ini(char *t) {
         else if (ud_key_is(line, "window_x")) { g_uds.win_x = ud_atoi(v); g_uds.have_pos |= 1; }
         else if (ud_key_is(line, "window_y")) { g_uds.win_y = ud_atoi(v); g_uds.have_pos |= 2; }
         else if (ud_key_is(line, "render_resolution")) { g_uds.seen_rr = 1; ud_parse_res(v, &g_uds.rr_mode, &g_uds.rr_w, &g_uds.rr_h); }
+        else if (ud_key_is(line, "presentation")) g_uds.fill = ud_key_is(v, "fill");
         else if (ud_key_is(line, "window_width")) { int x = ud_atoi(v); if (x >= 320 && x <= 16384) g_uds.window_w = x; }
         else if (ud_key_is(line, "window_height")) { int x = ud_atoi(v); if (x >= 240 && x <= 16384) g_uds.window_h = x; }
         else if (ud_key_is(line, "developer")) g_uds.developer = ud_atoi(v) != 0;
@@ -592,6 +595,7 @@ static void disp_setup(int replay) {
     }
     g_disp.borderless = g_dopt_mode >= 0 ? g_dopt_mode : g_ud_release ? (g_uds.seen_mode ? g_uds.borderless : 1) : 1;
     g_disp.fullscreen = g_dopt_mode < 0 && g_ud_release && g_uds.fullscreen;
+    g_disp.fill = g_ud_release && g_uds.fill;
     if (rr_mode == 2) { g_disp.fullscreen_w = rr_w; g_disp.fullscreen_h = rr_h; }
     g_disp.mon_req = g_dopt_mon >= 0 ? g_dopt_mon : g_ud_release ? g_uds.monitor : 0;
     g_disp.cw_req = g_dopt_cw ? g_dopt_cw : g_ud_release ? g_uds.window_w : 1280; g_disp.ch_req = g_dopt_ch ? g_dopt_ch : g_ud_release ? g_uds.window_h : 720;
@@ -608,7 +612,8 @@ static void disp_setup(int replay) {
     int ow = g_disp.out_w, oh = g_disp.out_h, pw, ph;
     if ((i64)ow * 9 > (i64)oh * 16) { ph = oh; pw = (int)(((i64)oh * 16 + 4) / 9); } else { pw = ow; ph = (int)(((i64)ow * 9 + 8) / 16); }
     say("display: "); say(g_disp.fullscreen ? "fullscreen on monitor " : g_disp.borderless ? "borderless on monitor " : "windowed on monitor "); say_dec(g_disp.mon + 1); say(", "); say_dec(ow); say("x"); say_dec(oh);
-    say(", picture area "); say_dec(pw); say("x"); say_dec(ph); say(pw < ow ? " (pillarbox: black bars left and right)" : ph < oh ? " (letterbox: black bars above and below)" : " (the whole of it)"); say("\n");
+    say(", fitted picture area "); say_dec(pw); say("x"); say_dec(ph);
+    say(g_disp.fill ? " (presentation: fill, crop to the screen)" : " (presentation: fit, keep the whole picture)"); say("\n");
     if (forced) { say("display: internal resolution from --render-scale "); say_dec(g_rs_pct); say(" (developer switch)\n"); return; }
     int th = ph; if (rr_mode == 2) th = rr_h < (rr_w * 9 + 8) / 16 ? rr_h : (rr_w * 9 + 8) / 16;
     int ci = disp_pick(th), c0 = ci;
