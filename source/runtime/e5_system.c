@@ -13,7 +13,7 @@ static SYSV int ss_param_get_int(int id, int *v) {
     TRACE("sceSystemServiceParamGetInt", id, v, 0);
     if (!v) return (int)0x80A10001;
     switch (id) {
-    case 1: *v = 1; break;      /* language: English (US) */
+    case 1: *v = ud_game_language(); break;
     case 2: *v = 0; break;      /* date format YYYYMMDD */
     case 3: *v = 0; break;      /* 12-hour clock */
     case 4: *v = 0; break;      /* time zone offset (minutes) */
@@ -489,11 +489,13 @@ static int g_opt_no_dlc;
 static int sfo_str(const u8 *d, u64 n, const char *key, char *out, int outn) {   /* param.sfo string value (0 if absent) */
     if (n < 20 || d[0] != 0 || d[1] != 'P' || d[2] != 'S' || d[3] != 'F') return 0;
     u32 kt = *(const u32 *)(d + 8), dt = *(const u32 *)(d + 12), cnt = *(const u32 *)(d + 16);
+    u64 key_len = (u64)str_len(key);
     for (u32 i = 0; i < cnt && 20 + 16ull * i + 16 <= n; i++) {
         const u8 *e = d + 20 + 16 * i;
         u16 ko = *(const u16 *)e; u32 len = *(const u32 *)(e + 4), doff = *(const u32 *)(e + 12);
-        if (kt + ko >= n || dt + (u64)doff + len > n) continue;
-        if (!str_eq((const char *)d + kt + ko, key)) continue;
+        u64 key_pos = (u64)kt + ko;
+        if (key_pos + key_len >= n || dt + (u64)doff + len > n) continue;
+        if (!str_eq((const char *)d + key_pos, key)) continue;
         int k = 0; while (k < (int)len && k < outn - 1 && d[dt + doff + k]) { out[k] = (char)d[dt + doff + k]; k++; }
         out[k] = 0; return 1;
     }
@@ -511,8 +513,11 @@ static int ac_addon_present(const char *label) {
     if (!sfo_str(buf, n, "CONTENT_ID", cid, sizeof cid)) return 0;
     cl = str_len(cid);
     if (cl < L + 1 || cid[cl - L - 1] != '-' || !str_eq(cid + cl - L, dir)) return 0;
-    for (int i = 0; i + 9 <= cl; i++) if (cid[i] == 'C' && cid[i + 1] == 'U' && cid[i + 2] == 'S' && cid[i + 3] == 'A' && cid[i + 4] == '0' && cid[i + 5] == '2' && cid[i + 6] == '6' && cid[i + 7] == '3' && cid[i + 8] == '6') return 1;
-    return 0;
+    /* PS4 CONTENT_ID begins with six publisher characters, a dash, and the nine-character TITLE_ID. */
+    if (cl < 17 || cid[6] != '-' || cid[16] != '_') return 0;
+    char title_id[10] = "";
+    mem_copy(title_id, cid + 7, sizeof title_id - 1);
+    return str_eq(title_id, ud_game_title_id());
 }
 static SYSV int ac_ent_key(int label_kind, const char *label, void *key) {
     TRACE("sceAppContentGetEntitlementKey", label_kind, label, key);

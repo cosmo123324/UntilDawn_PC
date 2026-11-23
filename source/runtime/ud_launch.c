@@ -3,7 +3,7 @@
  *
  *   UntilDawn_PC\
  *     UntilDawn.exe
- *     Game\      the player's own extracted CUSA02636 install, version 01.03 (eboot.bin, all_programs.prx,
+ *     Game\      the player's own extracted CUSA02636 or CUSA00359 install, version 01.03 (eboot.bin, all_programs.prx,
  *                sce_sys\param.sfo, localcachepink\, Movies\, audio\)
  *     Config\    settings.ini (created with defaults on the first start)
  *     Logs\      UntilDawn.log, renderer log, captures (developer mode)
@@ -76,11 +76,28 @@ static int sha_file(const char *path, char out[65]) {
 }
 
 /* ---------------------------------------------------------------- the supported game version */
-/* CUSA02636 (EP9000, "Until Dawn") with the 01.03 update applied. The binary patches in this program (TLS, SSE4a,
-   RDTSC sites) are made for exactly these two executables. */
-#define UD_EBOOT_V103_SHA "ca291314cdd5308694eb9243f1ba098e97817087e5356d78d94cf8854abebd26"
+/* The two 01.03 eboots share the code layout used by the runtime patches and use the same PRX. */
 #define UD_EBOOT_V100_SHA "fdd1e3247e1f931e277336099062aa240c362b48ae0a7d68e08390dfbd743789"
 #define UD_PRX_V103_SHA   "b0020e11d8236bfd0c57821b673027ad615670df5175557e74ee0b61a27ca3af"
+
+typedef struct {
+    const char *title_id, *eboot_sha;
+    const UdFile *files;
+    u64 file_count;
+    int language;   /* PS4 system language, as reported to the game */
+} UdGameProfile;
+
+static const UdGameProfile g_ud_profiles[] = {
+    {"CUSA02636", "ca291314cdd5308694eb9243f1ba098e97817087e5356d78d94cf8854abebd26",
+        g_ud_eu_files, sizeof g_ud_eu_files / sizeof g_ud_eu_files[0], 1},   /* en-US */
+    {"CUSA00359", "f7667bbf415edce1f6ac2a5a7d869accc4a1787990f2c776b23a4a8e69ef6d67",
+        g_ud_br_files, sizeof g_ud_br_files / sizeof g_ud_br_files[0], 17},   /* pt-BR */
+};
+static const UdGameProfile *g_ud_profile;
+static const u64 g_ud_common_count = sizeof g_ud_common_files / sizeof g_ud_common_files[0];
+
+static const char *ud_game_title_id(void) { return g_ud_profile ? g_ud_profile->title_id : g_ud_profiles[0].title_id; }
+static int ud_game_language(void) { return g_ud_profile ? g_ud_profile->language : g_ud_profiles[0].language; }
 
 /* ---------------------------------------------------------------- settings (Config\settings.ini) */
 /* Only settings that actually change something are listed. Each one is applied in ud_apply_settings(). */
@@ -133,7 +150,7 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; Until Dawn (native PC build) - settings\r\n"
     "; Delete this file to restore the defaults; it is recreated on the next start.\r\n"
     "\r\n"
-    "; Folder with the original game files (your own extracted CUSA02636 install with the 01.03 update).\r\n"
+    "; Folder with the original game files (your own CUSA02636 or CUSA00359 install with the 01.03 update).\r\n"
     "; Empty = the Game folder next to UntilDawn.exe.\r\n"
     "game_dir =\r\n"
     "\r\n"
@@ -326,19 +343,29 @@ typedef struct { char *b; int n, cap; } UdMsg;
 static void um(UdMsg *m, const char *s) { while (*s && m->n + 1 < m->cap) m->b[m->n++] = *s++; m->b[m->n] = 0; }
 static void um_d(UdMsg *m, i64 v) { char t[24]; fmt_dec(t, v); um(m, t); }
 
-/* param.sfo: value of a string key (0 if absent) */
-static int sfo_get(const u8 *d, u64 n, const char *key, char *out, int outn) {
-    if (n < 20 || d[0] != 0 || d[1] != 'P' || d[2] != 'S' || d[3] != 'F') return 0;
-    u32 kt = *(const u32 *)(d + 8), dt = *(const u32 *)(d + 12), cnt = *(const u32 *)(d + 16);
-    for (u32 i = 0; i < cnt && 20 + 16ull * i + 16 <= n; i++) {
-        const u8 *e = d + 20 + 16 * i;
-        u16 ko = *(const u16 *)e; u32 len = *(const u32 *)(e + 4), doff = *(const u32 *)(e + 12);
-        if (kt + ko >= n || dt + (u64)doff + len > n) continue;
-        if (!str_eq((const char *)d + kt + ko, key)) continue;
-        int k = 0; while (k < (int)len && k < outn - 1 && d[dt + doff + k]) { out[k] = (char)d[dt + doff + k]; k++; }
-        out[k] = 0; return 1;
+static int ud_read_game_metadata(const char *dir, char id[32], char version[16]) {
+    char path[1200];
+    path_join(path, dir, "sce_sys/param.sfo");
+    void *file = hf_open_rb(path);
+    if (!file) return 0;
+    u8 data[4096];
+    u64 size = hf_read(file, data, sizeof data);
+    hf_close(file);
+    sfo_str(data, size, "TITLE_ID", id, 32);
+    sfo_str(data, size, "APP_VER", version, 16);
+    return 1;
+}
+
+/* Direct developer runs still accept arbitrary dumps. Use the local title for language and add-ons. */
+static void ud_detect_game_profile(const char *dir) {
+    char id[32] = "", version[16] = "";
+    if (!ud_read_game_metadata(dir, id, version) || !str_eq(version, "01.03")) return;
+    for (u64 i = 0; i < sizeof g_ud_profiles / sizeof g_ud_profiles[0]; i++) {
+        if (str_eq(id, g_ud_profiles[i].title_id)) {
+            g_ud_profile = &g_ud_profiles[i];
+            return;
+        }
     }
-    return 0;
 }
 
 /* 0 = the folder holds the supported game files; otherwise msg says what is wrong */
@@ -346,25 +373,27 @@ static int ud_validate(const char *dir, UdMsg *msg) {
     char p[1200], h[65];
     if (!plat_is_dir(dir)) {
         um(msg, "The game folder was not found:\n    "); um(msg, dir);
-        um(msg, "\n\nUntil Dawn needs the original game files from your own copy of the PS4 game (CUSA02636, "
+        um(msg, "\n\nUntil Dawn needs the original game files from your own copy of the PS4 game (CUSA02636 or CUSA00359, "
                 "updated to version 01.03), extracted into that folder. See README.txt next to UntilDawn.exe.");
         return 1;
     }
     path_join(p, dir, "eboot.bin");
     if (!sha_file(p, h)) {
         um(msg, "eboot.bin is missing from the game folder:\n    "); um(msg, dir);
-        um(msg, "\n\nThe folder must contain the extracted PS4 game (CUSA02636) with the 01.03 update applied: "
+        um(msg, "\n\nThe folder must contain the extracted PS4 game (CUSA02636 or CUSA00359) with the 01.03 update applied: "
                 "eboot.bin, all_programs.prx, sce_sys\\param.sfo, localcachepink\\, Movies\\ and audio\\.");
         return 2;
     }
-    if (!str_eq(h, UD_EBOOT_V103_SHA)) {
+    const UdGameProfile *profile = 0;
+    for (u64 i = 0; i < sizeof g_ud_profiles / sizeof g_ud_profiles[0]; i++)
+        if (str_eq(h, g_ud_profiles[i].eboot_sha)) { profile = &g_ud_profiles[i]; break; }
+    if (!profile) {
         if (str_eq(h, UD_EBOOT_V100_SHA))
             um(msg, "The game folder holds version 01.00 of Until Dawn. This program needs version 01.03: "
                     "apply the 01.03 update to the extracted game files (the update replaces eboot.bin, "
                     "all_programs.prx and 151 data files).");
-        else { um(msg, "eboot.bin is not the supported version of Until Dawn (CUSA02636, version 01.03).\n\nFound SHA-256:\n    "); um(msg, h);
-               um(msg, "\nexpected:\n    " UD_EBOOT_V103_SHA "\n\nThe file may be damaged, from another region or another version, "
-                       "or modified (speed patches and other mods replace this file)."); }
+        else { um(msg, "eboot.bin does not match Until Dawn CUSA02636 or CUSA00359, version 01.03.\n\nFound SHA-256:\n    "); um(msg, h);
+               um(msg, "\n\nThe file may be damaged, from another region or another version, or modified."); }
         um(msg, "\n\nGame folder: "); um(msg, dir);
         return 3;
     }
@@ -373,33 +402,39 @@ static int ud_validate(const char *dir, UdMsg *msg) {
         um(msg, "all_programs.prx in the game folder is missing or is not the version that belongs to eboot.bin 01.03.\n\nGame folder: "); um(msg, dir);
         return 4;
     }
-    path_join(p, dir, "sce_sys/param.sfo");
-    { u64 n = 0; u8 *d = (u8 *)plat_read_file(p, &n); char id[32] = "", ver[16] = "";
-      if (d) { sfo_get(d, n, "TITLE_ID", id, sizeof id); sfo_get(d, n, "APP_VER", ver, sizeof ver); }
-      if (!d || !str_eq(id, "CUSA02636") || !str_eq(ver, "01.03")) {
-          um(msg, "sce_sys\\param.sfo is missing or does not describe Until Dawn CUSA02636 version 01.03");
-          if (d) { um(msg, " (found title "); um(msg, id[0] ? id : "?"); um(msg, ", version "); um(msg, ver[0] ? ver : "?"); um(msg, ")"); }
-          um(msg, ".\n\nGame folder: "); um(msg, dir);
-          return 5;
-      } }
+    char id[32] = "", version[16] = "";
+    int has_sfo = ud_read_game_metadata(dir, id, version);
+    if (!has_sfo || !str_eq(id, profile->title_id) || !str_eq(version, "01.03")) {
+        um(msg, "sce_sys\\param.sfo is missing or does not match the eboot.bin for ");
+        um(msg, profile->title_id); um(msg, " version 01.03");
+        if (has_sfo) { um(msg, " (found title "); um(msg, id[0] ? id : "?"); um(msg, ", version "); um(msg, version[0] ? version : "?"); um(msg, ")"); }
+        um(msg, ".\n\nGame folder: "); um(msg, dir);
+        return 5;
+    }
     /* every data file: present with the right size */
-    int nbad = 0, nmiss = 0; u64 nfiles = sizeof g_ud_manifest / sizeof g_ud_manifest[0];
+    int nbad = 0, nmiss = 0;
+    const UdFile *groups[] = {g_ud_common_files, profile->files};
+    const u64 counts[] = {g_ud_common_count, profile->file_count};
     UdMsg list = {0}; static char lb[2048]; list.b = lb; list.cap = sizeof lb; lb[0] = 0;
-    for (u64 i = 0; i < nfiles; i++) {
-        path_join(p, dir, g_ud_manifest[i].path);
-        i64 sz = plat_file_size(p);
-        if (sz == (i64)g_ud_manifest[i].size) continue;
-        if (sz < 0) nmiss++; else nbad++;
-        if (nmiss + nbad <= 8) { um(&list, "    "); um(&list, g_ud_manifest[i].path); um(&list, sz < 0 ? "  (missing)\n" : "  (wrong size)\n"); }
+    for (int group = 0; group < 2; group++) {
+        for (u64 i = 0; i < counts[group]; i++) {
+            const UdFile *file = &groups[group][i];
+            path_join(p, dir, file->path);
+            i64 sz = plat_file_size(p);
+            if (sz == (i64)file->size) continue;
+            if (sz < 0) nmiss++; else nbad++;
+            if (nmiss + nbad <= 8) { um(&list, "    "); um(&list, file->path); um(&list, sz < 0 ? "  (missing)\n" : "  (wrong size)\n"); }
+        }
     }
     if (nmiss || nbad) {
         um(msg, "Some of the original game files are missing or incomplete (");
         um_d(msg, nmiss); um(msg, " missing, "); um_d(msg, nbad); um(msg, " with the wrong size, of ");
-        um_d(msg, (i64)nfiles); um(msg, " checked):\n\n"); um(msg, lb);
+        um_d(msg, (i64)(g_ud_common_count + profile->file_count)); um(msg, " checked):\n\n"); um(msg, lb);
         if (nmiss + nbad > 8) um(msg, "    ...\n");
         um(msg, "\nCopy the complete extracted game (with the 01.03 update) into:\n    "); um(msg, dir);
         return 6;
     }
+    g_ud_profile = profile;
     return 0;
 }
 

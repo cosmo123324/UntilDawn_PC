@@ -82,6 +82,8 @@ typedef struct Module {
 static Module g_eboot, g_prx;
 static int g_prx_loaded;
 static const char *g_game_dir;
+static const char *ud_game_title_id(void);
+static int ud_game_language(void);
 
 /* SELF -> segments. Returns 0 on success; fills m->ph and maps data. */
 static u8 *read_file(const char *path, u64 *size) { return (u8 *)plat_read_file(path, size); }
@@ -3438,7 +3440,8 @@ static int ud_player_start(int *pargc, char ***pargv) {
         plat_message_box("Until Dawn - game files required", mb);
         return 10 + bad;
     }
-    say("ok (CUSA02636 01.03, "); say_dec((i64)(sizeof g_ud_manifest / sizeof g_ud_manifest[0])); say(" files)\n");
+    say("ok ("); say(ud_game_title_id()); say(" 01.03, ");
+    say_dec((i64)(g_ud_common_count + g_ud_profile->file_count)); say(" files)\n");
     if (g_uds.disp_auto) g_dopt_on = 1;   /* w6_disp: OFF unless the settings ask for it (or --display-auto) */
     if (g_dopt_save && g_uds.disp_auto && !g_uds.seen_rr) {   /* w6_disp: a settings file of an earlier version. Its display lines were that version's defaults unless changed: untouched
                                               defaults (windowed 1280x720) become the new default, borderless; anything else is the player's choice and stays. */
@@ -4187,11 +4190,13 @@ int e3_main(int argc, char **argv) {
         plat_exit(r);
     }
     if (!g_game_dir) { plat_write(0, "usage: e5_loader <game_dir containing eboot.bin> [--main] [--timeout seconds] [--frames N] [--dump N] [--dump-frames a,b,c] [--no-window] [--shot N] [--no-cull]\n"); return 2; }
+    if (!g_ud_profile) ud_detect_game_profile(g_game_dir);
     pm_init(&g_log_lock);
     g_trace = plat_open_write(g_ud_release ? "Logs/os_calls.txt" : "e3_trace.txt");
     say("Until Dawn PC runtime v" UD_VERSION " (build " __DATE__ " " __TIME__ "): the game's own x86-64 code runs directly on this CPU; "
         "the PS4 system libraries and the GPU are provided by this program's compatibility layer (Windows + Vulkan)\n");
     say("game dir: "); say(g_game_dir); say("\n");
+    say("  PS4 system language: "); say_dec(ud_game_language()); say("\n");
     plat_install_handlers();
     g_lz_fault_fn = lz_fault;   /* t111 */
     say(g_opt_lazy_mem ? "  game memory: large mappings committed on first use (--lazy-memory, experiment)\n" : "  game memory: large mappings committed at once\n");
