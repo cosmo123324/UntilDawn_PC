@@ -208,6 +208,8 @@ The file is created with these defaults if it is missing. Delete it to restore t
 | Setting | Default | Values |
 | --- | --- | --- |
 | `game_dir` | *(empty)* | Folder with the game files. Empty = the `Game` folder next to `UntilDawn.exe`. |
+| `show_launcher` | `0` | Set to `1` to choose the experimental LOD distance in a Windows dialog before the game starts. |
+| `lod_distance` | `100` | Experimental viewport LOD defaults in percent, from `100` to `150`. At `100`, the game uses its original defaults. Scene-specific culling remains active. |
 | `frame_rate_limit` | `60` | `30`, `60`, `120`, `240` or `uncapped` (also `0`). Uncapped still stops at 240 FPS so that physics and cloth keep real time; a number above 240 counts as 240 (other numbers up to 240, e.g. `144`, also work). Independent of `optimised_rendering`. |
 | `optimised_rendering` | `1` | **Optimised Rendering (Fast Mode).** `1` = on: the game starts its next frame while the graphics card finishes the previous one, with safety checks that keep the game's memory consistent - the same picture, clearly faster. `0` = off. It does not change the frame-rate limit. If you see a problem, try `0` and report whether it made a difference. New in v0.4.0. |
 | `display_mode` | `borderless` | `borderless` = the game fills the whole monitor at its own resolution; `windowed` = a window. Alt+Enter switches while the game runs (the choice is saved). Settings files from earlier versions with the old default (windowed 1280x720) are switched to borderless once; other choices are kept. |

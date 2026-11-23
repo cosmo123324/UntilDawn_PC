@@ -129,6 +129,7 @@ typedef struct {
     int fps_asked;           /* frame_rate_limit as written (before the 240 ceiling) */
     int fresh;               /* rc3: the file was written with the defaults at this start (its values are the defaults, not the player's) */
     int xbox_prompts;
+    int show_launcher, lod_distance;
 } UdSettings;
 static UdSettings g_uds = {"", 60, 0, 1280, 720, 0, 1, "", 0, 512, 1, 1, 1, 0, 0};
 static int g_ud_release;     /* started as the player-facing program (no command-line arguments) */
@@ -155,8 +156,12 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; Empty = the Game folder next to UntilDawn.exe.\r\n"
     "game_dir =\r\n"
     "\r\n"
-    "; button_prompts = xbox displays A/B/X/Y and RT in supported prompts. Restart after changing.\r\n"
+    "; button_prompts = xbox displays A/B/X/Y, LB/RB and RT in supported prompts. Restart after changing.\r\n"
     "button_prompts = playstation\r\n"
+    "\r\n"
+    "; Optional pre-game dialog and experimental viewport LOD distance defaults (100 to 150).\r\n"
+    "show_launcher = 0\r\n"
+    "lod_distance = 100\r\n"
     "\r\n"
     "; Frame-rate limit: 30, 60, 120, 240 or uncapped (uncapped can also be written as 0). 60 is the default.\r\n"
     "; uncapped still stops at 240 frames a second, so that physics and cloth keep real time; a number above 240\r\n"
@@ -295,6 +300,11 @@ static void ud_parse_ini(char *t) {
         *eq = 0; char *v = eq + 1; ud_trim(line); while (*v == ' ' || *v == '\t') v++; ud_trim(v);
         if (ud_key_is(line, "game_dir")) { int n = str_len(v); if (n >= (int)sizeof g_uds.game_dir) n = sizeof g_uds.game_dir - 1; mem_copy(g_uds.game_dir, v, (u64)n); g_uds.game_dir[n] = 0; }
         else if (ud_key_is(line, "button_prompts")) g_uds.xbox_prompts = ud_key_is(v, "xbox");
+        else if (ud_key_is(line, "show_launcher")) g_uds.show_launcher = ud_bool(v, 0);
+        else if (ud_key_is(line, "lod_distance")) {
+            int pct = str_len(v) == 3 ? ud_atoi(v) : 100;
+            g_uds.lod_distance = pct >= 100 && pct <= 150 ? pct : 100;
+        }
         else if (ud_key_is(line, "frame_rate_limit")) {   /* w16_rel: 30 / 60 / 120 / 240 / uncapped (= 0); any other number up to 240 still works, above 240 counts as 240 */
             int x = ud_atoi(v); if (ud_key_is(v, "uncapped") || ud_key_is(v, "unlimited") || ud_key_is(v, "none") || ud_key_is(v, "off")) x = 0;
             else if (v[0] == '-') x = 0;   /* (a negative number: uncapped, as before) */
@@ -332,6 +342,7 @@ static void ud_parse_ini(char *t) {
 static void ud_load_settings(const char *cfg_dir) {
     char p[1100]; path_join(p, cfg_dir, "settings.ini"); { int k = 0; while (p[k] && k < (int)sizeof g_ud_ini_path - 1) { g_ud_ini_path[k] = p[k]; k++; } g_ud_ini_path[k] = 0; }
     g_uds.disp_auto = 1; g_uds.fast_render = 1; g_uds.gpu_opt = 1; g_uds.fps_asked = 60;   /* w16_rel: the v0.4.0 defaults (a line in the file wins) */
+    g_uds.lod_distance = 100;
     u64 n = 0; char *t = (char *)plat_read_file(p, &n);
     if (!t) {   /* first start: write the defaults */
         void *f = plat_open_write(p);

@@ -83,7 +83,7 @@ static Module g_eboot, g_prx;
 static int g_prx_loaded;
 static const char *g_game_dir;
 static int g_opt_xbox_prompts;
-enum { XBOX_A, XBOX_B, XBOX_X, XBOX_Y, XBOX_RT };
+enum { XBOX_A, XBOX_B, XBOX_X, XBOX_Y, XBOX_LB, XBOX_RB, XBOX_RT };
 static u8 xbox_glyph_coverage(u32 button, u32 x, u32 y, u32 w, u32 h);
 static const char *ud_game_title_id(void);
 static int ud_game_language(void);
@@ -254,6 +254,30 @@ static int relocate(Module *m, int is_main);
 static u64 g_tls_offset;
 #include "e3_hle.c"    /* HLE implementations + hle_lookup() */
 #include "ud_launch.c"  /* UntilDawn.exe: settings, game-folder validation, player-facing start */
+#include "ud_prelaunch.c"
+
+/* ViewportSetup's two constructors initialize LODDistanceMultiplier and
+   LowLODDistanceMultiplier at +0x48/+0x4c. Preserve authored overrides. */
+static void ud_patch_lod_distance(Module *m, int pct) {
+    if (pct <= 100) return;
+    static const u32 sites[] = {0x115460a, 0x11548a2};
+    static const u8 expected[] = {0x48, 0xb8, 0, 0, 0x80, 0x3f, 0, 0, 0x80, 0x3f, 0x48, 0x89, 0x43, 0x48};
+    for (u64 i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        if (sites[i] + sizeof expected > m->size) return;
+        for (u64 j = 0; j < sizeof expected; j++) {
+            if (m->base[sites[i] + j] != expected[j]) {
+                say("  Viewport LOD defaults: this eboot layout is not supported\n");
+                return;
+            }
+        }
+    }
+    float scale = (float)pct / 100.0f;
+    for (u64 i = 0; i < sizeof sites / sizeof sites[0]; i++) {
+        mem_copy(m->base + sites[i] + 2, &scale, sizeof scale);
+        mem_copy(m->base + sites[i] + 6, &scale, sizeof scale);
+    }
+    say("  Viewport LOD defaults: "); say_dec(pct); say("%\n");
+}
 
 /* the import table (e3_imports.h), from the game's own executable: one entry per imported symbol "<NID>#<lib>#<module>"
    that a relocation refers to (as the loader binds them);
@@ -3432,7 +3456,7 @@ static void e3_fatal_summary(void) {
 #ifndef E3_NO_MAIN
 /* UntilDawn.exe started without arguments (double-clicked): folders, settings, validation, then the game.
    Returns 0 to go on with the arguments it put in *pargc / *pargv, otherwise the exit code. */
-static int ud_player_start(int *pargc, char ***pargv) {
+static int ud_player_start(int *pargc, char ***pargv, int interactive) {
     static char base[1024], cfg[1100], logs[1100], logf[1200], prev[1200], game[1100], cap[1200], fpsbuf[16];
     static char *av[128];
     plat_exe_dir(base, sizeof base);
@@ -3467,6 +3491,16 @@ static int ud_player_start(int *pargc, char ***pargv) {
     }
     say("ok ("); say(ud_game_title_id()); say(" 01.03, ");
     say_dec((i64)(g_ud_common_count + g_ud_profile->file_count)); say(" files)\n");
+    if (interactive && g_uds.show_launcher) {
+        int picked = ud_prelaunch(g_uds.lod_distance);
+        if (!picked) return -1;
+        if (picked != g_uds.lod_distance) {
+            char setting[24];
+            fmt_dec(setting, picked);
+            ud_ini_set("lod_distance", setting, 0);
+            g_uds.lod_distance = picked;
+        }
+    }
     if (g_uds.disp_auto) g_dopt_on = 1;   /* w6_disp: OFF unless the settings ask for it (or --display-auto) */
     if (g_dopt_save && g_uds.disp_auto && !g_uds.seen_rr) {   /* w6_disp: a settings file of an earlier version. Its display lines were that version's defaults unless changed: untouched
                                               defaults (windowed 1280x720) become the new default, borderless; anything else is the player's choice and stays. */
@@ -3584,11 +3618,11 @@ int e3_main(int argc, char **argv) {
     if (g_guard_busy_low && g_relaunched < 2) { int ec = plat_relaunch(g_relaunched + 1, g_guard_busy_low_at); if (ec >= 0) return ec; g_relaunch_failed = 1; }   /* rc4: only for the game's heap slots (see GUARD_GAME_SLOTS) */
     int timeout = 60;
     g_game_dir = 0;
-    if (argc <= 1) { g_dopt_save = 1; int r = ud_player_start(&argc, &argv); if (r) return r; }   /* w6_disp: a player start saves display changes (the display system itself: display_system = auto in settings.ini) */
+    if (argc <= 1) { g_dopt_save = 1; int r = ud_player_start(&argc, &argv, 1); if (r) return r < 0 ? 0 : r; }   /* w6_disp: a player start saves display changes (the display system itself: display_system = auto in settings.ini) */
     else if (str_eq(argv[1], "--player")) {   /* t112 (test runs): start the game as a player start does (Config\settings.ini), plus the options after --player */
         int xa = argc - 2; char **xv = argv + 2;
         for (int k = 0; k < xa; k++) if (str_eq(xv[k], "--display-save")) g_dopt_save = 1;   /* w16_rel: tests of a player start that may write Config\settings.ini (new lines, display migration) */
-        int r = ud_player_start(&argc, &argv); if (r) return r;
+        int r = ud_player_start(&argc, &argv, 0); if (r) return r;
         say("options after --player:"); for (int k = 0; k < xa && argc < 127; k++) { argv[argc++] = xv[k]; say(" "); say(xv[k]); } argv[argc] = 0; say("\n");
     }
     if (g_relaunched) { say("address guard (w16_rel): this is new start "); say_dec(g_relaunched); say(" of at most 2 - the start before found the game's address window taken at "); say_hex(g_relaunch_prev); say(" by host memory (Windows' address-space layout differs at every start)\n"); }
@@ -4234,6 +4268,7 @@ int e3_main(int argc, char **argv) {
     char path[1024];
     path_join(path, g_game_dir, "eboot.bin");
     if (load_module(&g_eboot, path)) return 2;
+    ud_patch_lod_distance(&g_eboot, g_uds.lod_distance);
     u32 disp = plat_tls_alloc_disp();
     patch_tls(&g_eboot, disp);
     patch_extrq(&g_eboot);

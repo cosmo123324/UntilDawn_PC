@@ -15,6 +15,10 @@ GetAsyncKeyState
 GetCursorPos
 ScreenToClient
 MessageBoxA
+DialogBoxIndirectParamW
+EndDialog
+GetDlgItemInt
+SetDlgItemInt
 GetSystemMetrics
 SetProcessDPIAware
 AdjustWindowRect

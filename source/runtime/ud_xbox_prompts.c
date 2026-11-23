@@ -1,34 +1,45 @@
 /* In-memory Xbox prompts for the game's Scaleform textures. The input mappings
    and the game files are untouched. The artwork consists of original letter glyphs. */
 
+enum { LETTER_A, LETTER_B, LETTER_X, LETTER_Y, LETTER_L, LETTER_R, LETTER_T };
+
 static const u8 xbox_letters[][7] = {
     {14, 17, 17, 31, 17, 17, 17},  /* A */
     {30, 17, 17, 30, 17, 17, 30},  /* B */
     {17, 17, 10, 4, 10, 17, 17},   /* X */
     {17, 17, 10, 4, 4, 4, 4},      /* Y */
+    {16, 16, 16, 16, 16, 16, 31},  /* L */
     {30, 17, 17, 30, 20, 18, 17},  /* R */
     {31, 4, 4, 4, 4, 4, 4},        /* T */
 };
 
-static const u8 xbox_colors[][3] = {
-    {86, 220, 126}, {248, 104, 113}, {103, 185, 255}, {255, 217, 93},
-    {240, 240, 240},
+typedef struct {
+    u8 first, second, letters, color[3];
+} XboxGlyph;
+
+static const XboxGlyph xbox_glyphs[] = {
+    {LETTER_A, 0, 1, {86, 220, 126}},
+    {LETTER_B, 0, 1, {248, 104, 113}},
+    {LETTER_X, 0, 1, {103, 185, 255}},
+    {LETTER_Y, 0, 1, {255, 217, 93}},
+    {LETTER_L, LETTER_B, 2, {240, 240, 240}},
+    {LETTER_R, LETTER_B, 2, {240, 240, 240}},
+    {LETTER_R, LETTER_T, 2, {240, 240, 240}},
 };
 
 static u8 xbox_glyph_coverage(u32 button, u32 x, u32 y, u32 w, u32 h) {
-    int trigger = button == XBOX_RT;
-    u32 cols = trigger ? 11 : 5;
-    u32 cell = h * (trigger ? 46 : 54) / 700;
+    const XboxGlyph *glyph = &xbox_glyphs[button];
+    u32 cols = glyph->letters == 2 ? 11 : 5;
+    u32 cell = h * (glyph->letters == 2 ? 46 : 54) / 700;
     u32 max_cell = w * 76 / (100 * cols);
     if (cell > max_cell) cell = max_cell;
     if (!cell) return 0;
     u32 left = (w - cell * cols) / 2, top = (h - cell * 7) / 2;
     if (x < left || y < top || x >= left + cell * cols || y >= top + cell * 7) return 0;
     u32 col = (x - left) / cell, row = (y - top) / cell;
-    if (!trigger) return xbox_letters[button][row] & (16u >> col) ? 15 : 0;
-    if (col < 5) return xbox_letters[4][row] & (16u >> col) ? 15 : 0;
+    if (col < 5) return xbox_letters[glyph->first][row] & (16u >> col) ? 15 : 0;
     if (col == 5) return 0;
-    return xbox_letters[5][row] & (16u >> (col - 6)) ? 15 : 0;
+    return xbox_letters[glyph->second][row] & (16u >> (col - 6)) ? 15 : 0;
 }
 
 /* BC7 mode 6 uses one RGBA endpoint pair and four-bit indices. Keep RGB
@@ -71,7 +82,7 @@ static u8 *xbox_make_texture(const u8 *original, u32 size, u32 button) {
             u8 alpha[16];
             for (u32 i = 0; i < 16; i++)
                 alpha[i] = xbox_glyph_coverage(button, x * 4 + i % 4, y * 4 + i / 4, w, h);
-            xbox_bc7_block(texture + sizeof header + tile_addr(&tile, x, y, 0), xbox_colors[button], alpha);
+            xbox_bc7_block(texture + sizeof header + tile_addr(&tile, x, y, 0), xbox_glyphs[button].color, alpha);
         }
     }
     return texture;
@@ -97,6 +108,10 @@ static XboxPrompt g_xbox_textures[] = {
     {"icon_choices_i5c.gnf", 25648, XBOX_B},
     {"icon_choices_i62.gnf", 20528, XBOX_X},
     {"icon_choices_i65.gnf", 25648, XBOX_Y},
+    {"frontend_i504.gnf", 6192, XBOX_LB},
+    {"tutorial_i133.gnf", 6192, XBOX_LB},
+    {"frontend_i508.gnf", 6192, XBOX_RB},
+    {"tutorial_i131.gnf", 6192, XBOX_RB},
     {"tutorial_i10f.gnf", 9264, XBOX_RT},
     {"small_r2_button.uc.gnf", 9264, XBOX_RT},
 };
