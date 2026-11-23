@@ -76,6 +76,7 @@ GetNativeSystemInfo
 VirtualFree
 MultiByteToWideChar
 WideCharToMultiByte
+GetACP
 GetFullPathNameW
 CreateFileW
 MoveFileExW

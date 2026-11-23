@@ -600,17 +600,17 @@ static i64 plat_any_dirty(void *base, u64 size) {
 }
 static volatile int g_plat_hard_exit;   /* w13_prep: shader-preparation workers are still inside the driver's compiler: the process ends without unloading the driver under them */
 __declspec(dllimport) void *WINAPI GetCurrentProcess(void);
-static void plat_exit(int c) { plat_log_flush(0, 5000, 1); if (g_plat_hard_exit) TerminateProcess(GetCurrentProcess(), (u32)c); ExitProcess((u32)c); }   /* t146: the queued log text first */
+static void plat_fullscreen_shutdown(void);
+static void plat_exit(int c) { plat_fullscreen_shutdown(); plat_log_flush(0, 5000, 1); if (g_plat_hard_exit) TerminateProcess(GetCurrentProcess(), (u32)c); ExitProcess((u32)c); }   /* t146: the queued log text first */
 static void plat_sleep_ms(u32 ms) { Sleep(ms); }
 static u32 g_tls_idx;
+static u32 g_tls_extra_idx;
 static u32 plat_tls_alloc_disp(void) {
-    g_tls_idx = TlsAlloc();
-    if (g_tls_idx >= 64) { plat_write(0, "TlsAlloc returned an index >= 64; gs:[TlsSlots] patch impossible\n"); plat_exit(2); }
-    return 0x1480 + 8 * g_tls_idx;   /* TEB.TlsSlots[idx] */
+    return g_tls_idx < 64 ? 0x1480 + 8 * g_tls_idx : 0;   /* TEB.TlsSlots[idx] */
 }
 static void plat_set_thread_pointer(void *tp) { TlsSetValue(g_tls_idx, tp); }
 /* one more per-thread 8-byte slot the patched game code can address as gs:[disp] (0 = none) */
-static u32 plat_tls_extra_disp(void) { u32 i = TlsAlloc(); return i < 64 ? 0x1480 + 8 * i : 0; }
+static u32 plat_tls_extra_disp(void) { return g_tls_extra_idx < 64 ? 0x1480 + 8 * g_tls_extra_idx : 0; }
 __declspec(dllimport) void *WINAPI TlsGetValue(u32);
 static void *plat_get_thread_pointer(void) { return TlsGetValue(g_tls_idx); }
 
@@ -1005,11 +1005,29 @@ __declspec(dllimport) int WINAPI GetMonitorInfoA(void *, void *);
 __declspec(dllimport) void *WINAPI MonitorFromWindow(void *, u32);
 __declspec(dllimport) int WINAPI SetWindowPos(void *, void *, int, int, int, int, u32);
 __declspec(dllimport) i64 WINAPI SetWindowLongPtrA(void *, int, i64);
+__declspec(dllimport) void *WINAPI GetForegroundWindow(void);
+typedef struct {
+    char device[32];
+    u16 spec, driver, size, extra;
+    u32 fields;
+    i32 x, y;
+    u32 orientation, fixed_output;
+    u16 print_fields[5];
+    char form[32];
+    u16 log_pixels;
+    u32 bits_per_pixel, width, height, flags, frequency;
+    u32 other_fields[8];
+} PlatDisplayMode;
+_Static_assert(sizeof(PlatDisplayMode) == 156, "DEVMODEA size");
+_Static_assert(__builtin_offsetof(PlatDisplayMode, width) == 108, "DEVMODEA width offset");
+__declspec(dllimport) int WINAPI EnumDisplaySettingsExA(const char *, u32, PlatDisplayMode *, u32);
+__declspec(dllimport) i32 WINAPI ChangeDisplaySettingsExA(const char *, PlatDisplayMode *, void *, u32, void *);
 typedef struct { void *h; i32 x, y, w, ht, wx, wy, ww, wh; int primary; char name[32]; } PlatMon;
 static PlatMon g_mon[8]; static int g_nmon;
 static struct {
     int on;                    /* the display system is in charge of the window */
     int borderless;            /* request, then the current mode */
+    int fullscreen, fullscreen_w, fullscreen_h;
     int mon_req;               /* 0 = auto (primary), else 1-based number */
     int cw_req, ch_req;        /* windowed: client size wanted */
     int have_pos; i32 px, py;  /* windowed: saved place of the window (outer top-left) */
@@ -1022,6 +1040,56 @@ static struct {
     i32 rest[4]; int have_rest;   /* the window's rectangle before it went borderless */
 } g_disp;
 static void (*g_disp_changed_cb)(void);
+static PlatDisplayMode g_fs_original;
+static char g_fs_device[32];
+static volatile int g_fs_active, g_fs_exiting;
+
+static void plat_fullscreen_restore(void) {
+    if (!__atomic_exchange_n(&g_fs_active, 0, __ATOMIC_ACQ_REL)) return;
+    if (ChangeDisplaySettingsExA(g_fs_device, &g_fs_original, 0, 0, 0))
+        ChangeDisplaySettingsExA(g_fs_device, 0, 0, 0, 0);
+}
+
+static void plat_fullscreen_shutdown(void) {
+    g_fs_exiting = 1;
+    plat_fullscreen_restore();
+}
+
+static void plat_fullscreen_enter(void) {
+    if (g_fs_exiting) return;
+    const char *device = g_mon[g_disp.mon].name;
+    PlatDisplayMode original = {.size = sizeof original};
+    if (!EnumDisplaySettingsExA(device, (u32)-1 /* ENUM_CURRENT_SETTINGS */, &original, 0)) {
+        say("display: could not query fullscreen mode; using the desktop mode\n");
+        return;
+    }
+    PlatDisplayMode chosen = original;
+    if (g_disp.fullscreen_w > 0 &&
+        (original.width != (u32)g_disp.fullscreen_w || original.height != (u32)g_disp.fullscreen_h)) {
+        int best = 0x7fffffff;
+        for (u32 i = 0; ; i++) {
+            PlatDisplayMode mode = {.size = sizeof mode};
+            if (!EnumDisplaySettingsExA(device, i, &mode, 0)) break;
+            if (mode.width != (u32)g_disp.fullscreen_w || mode.height != (u32)g_disp.fullscreen_h ||
+                mode.bits_per_pixel != original.bits_per_pixel || mode.orientation != original.orientation ||
+                mode.flags != original.flags) continue;
+            int delta = (int)mode.frequency - (int)original.frequency;
+            if (delta < 0) delta = -delta;
+            if (delta < best) { chosen = mode; best = delta; }
+            if (!best) break;
+        }
+        if (best == 0x7fffffff) say("display: the monitor does not support the requested fullscreen resolution; using the desktop resolution\n");
+    }
+    g_fs_original = original;
+    mem_copy(g_fs_device, device, sizeof g_fs_device);
+    if (ChangeDisplaySettingsExA(device, &chosen, 0, 4 /* CDS_FULLSCREEN */, 0)) {
+        say("display: Windows refused the fullscreen mode; using the desktop mode\n");
+        return;
+    }
+    __atomic_store_n(&g_fs_active, 1, __ATOMIC_RELEASE);
+    if (g_fs_exiting) { plat_fullscreen_restore(); return; }
+    say("display: fullscreen mode active at "); say_dec(chosen.width); say("x"); say_dec(chosen.height); say("\n");
+}
 static void plat_dpi_init(void) {
     static int done; if (done) return; done = 1;
     void *u = GetModuleHandleA("user32.dll");
@@ -1152,6 +1220,7 @@ static WINAPI u32 plat_window_thread(void *arg) {
     if (!hw) return 0;
     g_win.hwnd = hw; g_win.hinst = inst;
     g_win.open = 1;
+    int fullscreen_focused = 0;
     __attribute__((aligned(16))) u8 msg[64];
     struct { u32 size; i32 w, h; u16 planes, bpp; u32 comp, img; i32 xp, yp; u32 used, imp; } bi;
     for (;;) {
@@ -1159,6 +1228,13 @@ static WINAPI u32 plat_window_thread(void *arg) {
         if (g_win_title_new) { g_win_title_new = 0; SetWindowTextA(hw, g_win_title_buf); }   /* t105: title set by another thread */
         if (g_disp.on) {   /* w6_disp */
             if (g_disp.toggle_req) { g_disp.toggle_req = 0; plat_disp_toggle(hw); g_win_borderless = g_disp.borderless; g_disp.refit = 0; }
+            int focused = g_disp.fullscreen && g_disp.borderless && !g_disp.sim_w && GetForegroundWindow() == hw;
+            if (focused != fullscreen_focused) {
+                fullscreen_focused = focused;
+                if (focused) plat_fullscreen_enter();
+                else plat_fullscreen_restore();
+                g_disp.refit |= 1;
+            }
             if (g_disp.refit) { int k_ = g_disp.refit; g_disp.refit = 0; if (g_disp.borderless) plat_disp_refit(hw); else if (k_ & 2) plat_disp_moved(hw); }
             if (g_disp.changed) { g_disp.changed = 0; if (g_disp_changed_cb) g_disp_changed_cb(); }
         }
@@ -1466,6 +1542,9 @@ static char *next_arg(char **p) {
     return r;
 }
 void entry(void) {
+    /* The game needs inline TEB slots. Reserve them before the GUI or graphics driver loads. */
+    g_tls_idx = TlsAlloc();
+    g_tls_extra_idx = TlsAlloc();
     static char *argv[256]; int argc = 0;
     char *cl = GetCommandLineA(), *a;
     while (argc < 255 && (a = next_arg(&cl))) argv[argc++] = a;
@@ -1711,7 +1790,7 @@ static void plat_window_open(void) {}
 static void plat_win_report(void) {}
 typedef struct { void *h; i32 x, y, w, ht, wx, wy, ww, wh; int primary; char name[32]; } PlatMon;
 static PlatMon g_mon[8]; static int g_nmon;
-static struct { int on, borderless, mon_req, cw_req, ch_req, have_pos; i32 px, py; int sim_w, sim_h, mon; i32 x, y; int w, h, out_w, out_h, dpi_mode; volatile int toggle_req, refit, changed; } g_disp;
+static struct { int on, borderless, fullscreen, fullscreen_w, fullscreen_h, mon_req, cw_req, ch_req, have_pos; i32 px, py; int sim_w, sim_h, mon; i32 x, y; int w, h, out_w, out_h, dpi_mode; volatile int toggle_req, refit, changed; } g_disp;
 static void (*g_disp_changed_cb)(void);
 static int plat_disp_resolve(void) { return 0; }
 static void plat_timer_1ms(void) {}

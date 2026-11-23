@@ -130,6 +130,7 @@ typedef struct {
     int fresh;               /* rc3: the file was written with the defaults at this start (its values are the defaults, not the player's) */
     int xbox_prompts;
     int show_launcher, lod_distance;
+    int fullscreen;
 } UdSettings;
 static UdSettings g_uds = {"", 60, 0, 1280, 720, 0, 1, "", 0, 512, 1, 1, 1, 0, 0};
 static int g_ud_release;     /* started as the player-facing program (no command-line arguments) */
@@ -159,8 +160,8 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; button_prompts = xbox displays A/B/X/Y, LB/RB and RT in supported prompts. Restart after changing.\r\n"
     "button_prompts = playstation\r\n"
     "\r\n"
-    "; Optional pre-game dialog and experimental viewport LOD distance defaults (100 to 150).\r\n"
-    "show_launcher = 0\r\n"
+    "; Launcher with game folder, controller icons, display settings and experimental LOD distance.\r\n"
+    "show_launcher = 1\r\n"
     "lod_distance = 100\r\n"
     "\r\n"
     "; Frame-rate limit: 30, 60, 120, 240 or uncapped (uncapped can also be written as 0). 60 is the default.\r\n"
@@ -174,9 +175,9 @@ static const char *k_ud_ini_default =   /* w16_rel: the v0.4.0 defaults (written
     "; limit. If you see a problem, set 0 to check whether it is related.\r\n"
     "optimised_rendering = 1\r\n"
     "\r\n"
-    "; borderless (default) = the game fills the whole monitor, at the monitor's own resolution; windowed = a window.\r\n"
-    "; Alt+Enter switches between the two while the game runs. The picture always keeps its 16:9 shape (black bars\r\n"
-    "; on other monitor shapes, never stretched).\r\n"
+    "; borderless fills the monitor at the desktop resolution; windowed has a frame and can be resized.\r\n"
+    "; fullscreen requests a temporary monitor mode while focused, using render_resolution when supported.\r\n"
+    "; Alt+Enter switches between a window and the chosen full-screen mode. The picture keeps its 16:9 shape.\r\n"
     "display_mode = borderless\r\n"
     "\r\n"
     "; Monitor: auto (the primary monitor) or its number in the monitor list of Logs\\UntilDawn.log (1, 2, ...).\r\n"
@@ -267,29 +268,98 @@ static void ud_parse_res(const char *v, int *mode, int *w, int *h) {
     if ((v[n] | 0x20) == 'x') { int b = ud_atoi(v + n + 1); if (a >= 320 && a <= 16384 && b >= 240 && b <= 16384) { *mode = 2; *w = a; *h = b; } }
 }
 static char g_ud_ini_path[1100];
-/* w6_disp: one "key = value" line of settings.ini changed in place (the first such line; comments and everything else stay
-   as they are), or added at the end with its comment when the file has no such line */
-static void ud_ini_set(const char *key, const char *val, const char *comment) {
-    if (!g_ud_ini_path[0]) return;
-    u64 n = 0; char *t = (char *)plat_read_file(g_ud_ini_path, &n); if (!t) return;
-    int kl = str_len(key), vl_ = str_len(val), cl = comment ? str_len(comment) : 0;
-    char *o = (char *)malloc(n + (u64)kl + (u64)vl_ + (u64)cl + 64); if (!o) return;
-    u64 w = 0, i = 0; int done = 0;
-    while (i < n) {
-        u64 ls = i; while (i < n && t[i] != '\n') i++; u64 le = i; if (i < n) i++;   /* line [ls, le), then its newline */
-        u64 a = ls; while (a < le && (t[a] == ' ' || t[a] == '\t')) a++;
-        int hit = 0;
-        if (!done && a + (u64)kl <= le) { hit = 1; for (int k = 0; k < kl; k++) if ((t[a + k] | 0x20) != (key[k] | 0x20)) { hit = 0; break; }
-            if (hit) { u64 b = a + (u64)kl; while (b < le && (t[b] == ' ' || t[b] == '\t')) b++; if (b >= le || t[b] != '=') hit = 0; } }
-        if (hit) { mem_copy(o + w, key, (u64)kl); w += (u64)kl; o[w++] = ' '; o[w++] = '='; o[w++] = ' '; mem_copy(o + w, val, (u64)vl_); w += (u64)vl_; o[w++] = '\r'; o[w++] = '\n'; done = 1; }
-        else { mem_copy(o + w, t + ls, i - ls); w += i - ls; }
+typedef struct { const char *key, *value, *comment; } UdIniEdit;
+
+static int ud_ini_matches(const char *line, const char *end, const char *key) {
+    while (line < end && (*line == ' ' || *line == '\t')) line++;
+    while (*key && line < end && (*line | 0x20) == (*key | 0x20)) { line++; key++; }
+    if (*key) return 0;
+    while (line < end && (*line == ' ' || *line == '\t')) line++;
+    return line < end && *line == '=';
+}
+
+static u64 ud_ini_line(char *out, const UdIniEdit *edit) {
+    u64 k = str_len(edit->key), v = str_len(edit->value);
+    mem_copy(out, edit->key, k);
+    mem_copy(out + k, " = ", 3);
+    mem_copy(out + k + 3, edit->value, v);
+    mem_copy(out + k + 3 + v, "\r\n", 2);
+    return k + v + 5;
+}
+
+/* Rewrite selected keys together, retaining unrelated settings and comments. */
+static int ud_ini_update(const UdIniEdit *edits, int count) {
+    if (!g_ud_ini_path[0] || count < 1 || count > 16) return 0;
+    u64 n = 0;
+    char *old = (char *)plat_read_file(g_ud_ini_path, &n);
+    if (!old) return 0;
+    u64 cap = n;
+    for (int i = 0; i < count; i++)
+        cap += str_len(edits[i].key) + str_len(edits[i].value) +
+               (edits[i].comment ? str_len(edits[i].comment) : 0) + 10;
+    char *out = cap <= 0xffffffffu ? (char *)malloc(cap) : 0;
+    u64 written = 0, pos = 0;
+    u32 seen = 0;
+    if (out) while (pos < n) {
+        u64 start = pos;
+        while (pos < n && old[pos] != '\n') pos++;
+        u64 end = pos;
+        if (pos < n) pos++;
+        int i = 0;
+        while (i < count && !ud_ini_matches(old + start, old + end, edits[i].key)) i++;
+        if (i == count) {
+            mem_copy(out + written, old + start, pos - start);
+            written += pos - start;
+        } else if (!(seen & (1u << i))) {
+            written += ud_ini_line(out + written, edits + i);
+            seen |= 1u << i;
+        }
     }
-    if (!done) { if (w && o[w - 1] != '\n') { o[w++] = '\r'; o[w++] = '\n'; }
-        if (cl) { o[w++] = '\r'; o[w++] = '\n'; mem_copy(o + w, comment, (u64)cl); w += (u64)cl; }
-        mem_copy(o + w, key, (u64)kl); w += (u64)kl; o[w++] = ' '; o[w++] = '='; o[w++] = ' '; mem_copy(o + w, val, (u64)vl_); w += (u64)vl_; o[w++] = '\r'; o[w++] = '\n'; }
-    o[w] = 0;
-    void *f = plat_open_write(g_ud_ini_path); if (f) { plat_write(f, o); plat_close(f); }
-    free(o);
+#ifdef _WIN32
+    plat_free_pages(old);
+#else
+    free(old);
+#endif
+    if (!out) return 0;
+    for (int i = 0; i < count; i++) if (!(seen & (1u << i))) {
+        if (written && out[written - 1] != '\n') { out[written++] = '\r'; out[written++] = '\n'; }
+        if (edits[i].comment) {
+            out[written++] = '\r'; out[written++] = '\n';
+            u64 length = str_len(edits[i].comment);
+            mem_copy(out + written, edits[i].comment, length);
+            written += length;
+        }
+        written += ud_ini_line(out + written, edits + i);
+    }
+    char tmp[sizeof g_ud_ini_path + 32];
+    int k = str_len(g_ud_ini_path);
+    mem_copy(tmp, g_ud_ini_path, k);
+    mem_copy(tmp + k, ".tmp-", 5);
+#ifdef _WIN32
+    fmt_dec(tmp + k + 5, GetCurrentProcessId());
+#else
+    fmt_dec(tmp + k + 5, getpid());
+#endif
+    void *file = plat_open_write(tmp);
+    int ok = 0;
+    if (file) {
+#ifdef _WIN32
+        u32 bytes = 0;
+        ok = WriteFile(file, out, (u32)written, &bytes, 0) && bytes == written;
+#else
+        ok = fwrite(out, 1, written, (FILE *)file) == written && fflush((FILE *)file) == 0;
+#endif
+        plat_close(file);
+        if (ok) ok = plat_replace_file(tmp, g_ud_ini_path);
+        if (!ok) plat_unlink(tmp);
+    }
+    free(out);
+    return ok;
+}
+
+static void ud_ini_set(const char *key, const char *value, const char *comment) {
+    const UdIniEdit edit = {key, value, comment};
+    ud_ini_update(&edit, 1);
 }
 static void ud_parse_ini(char *t) {
     while (*t) {
@@ -300,7 +370,7 @@ static void ud_parse_ini(char *t) {
         *eq = 0; char *v = eq + 1; ud_trim(line); while (*v == ' ' || *v == '\t') v++; ud_trim(v);
         if (ud_key_is(line, "game_dir")) { int n = str_len(v); if (n >= (int)sizeof g_uds.game_dir) n = sizeof g_uds.game_dir - 1; mem_copy(g_uds.game_dir, v, (u64)n); g_uds.game_dir[n] = 0; }
         else if (ud_key_is(line, "button_prompts")) g_uds.xbox_prompts = ud_key_is(v, "xbox");
-        else if (ud_key_is(line, "show_launcher")) g_uds.show_launcher = ud_bool(v, 0);
+        else if (ud_key_is(line, "show_launcher")) g_uds.show_launcher = ud_bool(v, 1);
         else if (ud_key_is(line, "lod_distance")) {
             int pct = str_len(v) == 3 ? ud_atoi(v) : 100;
             g_uds.lod_distance = pct >= 100 && pct <= 150 ? pct : 100;
@@ -313,7 +383,7 @@ static void ud_parse_ini(char *t) {
             g_uds.fps_asked = x; g_uds.fps_limit = x > UD_FPS_CEILING ? UD_FPS_CEILING : x; g_uds.seen_fps = 1; }
         else if (ud_key_is(line, "optimised_rendering") || ud_key_is(line, "optimized_rendering") || ud_key_is(line, "fast_mode")) { g_uds.fast_render = ud_bool(v, 1); g_uds.seen_fast = 1; }   /* w16_rel */
         else if (ud_key_is(line, "gpu_optimisations") || ud_key_is(line, "gpu_optimizations")) { g_uds.gpu_opt = ud_bool(v, 1); g_uds.seen_gpuopt = 1; }   /* w16_rel */
-        else if (ud_key_is(line, "display_mode")) { g_uds.borderless = ud_key_is(v, "borderless") || ud_key_is(v, "fullscreen"); g_uds.seen_mode = 1; }
+        else if (ud_key_is(line, "display_mode")) { g_uds.fullscreen = ud_key_is(v, "fullscreen"); g_uds.borderless = g_uds.fullscreen || ud_key_is(v, "borderless"); g_uds.seen_mode = 1; }
         else if (ud_key_is(line, "display_system")) { g_uds.disp_auto = !(ud_key_is(v, "off") || ud_key_is(v, "legacy") || ud_key_is(v, "old") || (v[0] == '0' && !v[1])); g_uds.seen_disp = 1; }   /* w6_disp; w16_rel: on unless off / legacy / 0 (v0.4.0: the default) */
         else if (ud_key_is(line, "monitor")) { int x = ud_atoi(v); g_uds.monitor = x >= 1 && x <= 8 ? x : 0; }   /* w6_disp */
         else if (ud_key_is(line, "window_x")) { g_uds.win_x = ud_atoi(v); g_uds.have_pos |= 1; }
@@ -343,6 +413,7 @@ static void ud_load_settings(const char *cfg_dir) {
     char p[1100]; path_join(p, cfg_dir, "settings.ini"); { int k = 0; while (p[k] && k < (int)sizeof g_ud_ini_path - 1) { g_ud_ini_path[k] = p[k]; k++; } g_ud_ini_path[k] = 0; }
     g_uds.disp_auto = 1; g_uds.fast_render = 1; g_uds.gpu_opt = 1; g_uds.fps_asked = 60;   /* w16_rel: the v0.4.0 defaults (a line in the file wins) */
     g_uds.lod_distance = 100;
+    g_uds.show_launcher = 1;
     u64 n = 0; char *t = (char *)plat_read_file(p, &n);
     if (!t) {   /* first start: write the defaults */
         void *f = plat_open_write(p);
@@ -454,6 +525,20 @@ static int ud_validate(const char *dir, UdMsg *msg) {
     return 0;
 }
 
+static int ud_check_game(const char *game, UdMsg *msg) {
+    say("game folder: "); say(game); say("\n");
+    u64 t0 = plat_ticks();
+    int bad = ud_validate(game, msg);
+    say("game files checked in "); say_dec((i64)((plat_ticks() - t0) * 1000 / plat_ticks_per_sec())); say(" ms: ");
+    if (bad) {
+        say("NOT USABLE\n"); say(msg->b); say("\n");
+    } else {
+        say("ok ("); say(ud_game_title_id()); say(" 01.03, ");
+        say_dec((i64)(g_ud_common_count + g_ud_profile->file_count)); say(" files)\n");
+    }
+    return bad;
+}
+
 /* ---------------------------------------------------------------- w6_disp: display mode and automatic resolution
    The player no longer chooses a percentage. The display system (a player start, or --display-auto / any --display-* /
    --monitor / --window / --sim-monitor option in a developer run) decides:
@@ -491,7 +576,7 @@ static void disp_save(void) {   /* window thread: something worth keeping change
     say(g_dopt_save ? " (saved to Config\\settings.ini)\n" : " (not saved: not a player start)\n");
     if (!g_dopt_save) return;
     char v[24];
-    if (g_disp.borderless != g_disp_start_mode) { ud_ini_set("display_mode", g_disp.borderless ? "borderless" : "windowed", 0); g_disp_start_mode = g_disp.borderless; }
+    if (g_disp.borderless != g_disp_start_mode) { ud_ini_set("display_mode", g_disp.borderless ? (g_disp.fullscreen ? "fullscreen" : "borderless") : "windowed", 0); g_disp_start_mode = g_disp.borderless; }
     if (g_disp.borderless) { if (g_disp.mon != g_disp_start_mon) { disp_fmt(v, g_disp.mon + 1); ud_ini_set("monitor", v, 0); g_disp_start_mon = g_disp.mon; } }
     else { disp_fmt(v, g_disp.w); ud_ini_set("window_width", v, 0); disp_fmt(v, g_disp.h); ud_ini_set("window_height", v, 0);
            disp_fmt(v, g_disp.x); ud_ini_set("window_x", v, "; Where the window was (written by the program)\r\n"); disp_fmt(v, g_disp.y); ud_ini_set("window_y", v, 0); }
@@ -506,6 +591,8 @@ static void disp_setup(int replay) {
         return;
     }
     g_disp.borderless = g_dopt_mode >= 0 ? g_dopt_mode : g_ud_release ? (g_uds.seen_mode ? g_uds.borderless : 1) : 1;
+    g_disp.fullscreen = g_dopt_mode < 0 && g_ud_release && g_uds.fullscreen;
+    if (rr_mode == 2) { g_disp.fullscreen_w = rr_w; g_disp.fullscreen_h = rr_h; }
     g_disp.mon_req = g_dopt_mon >= 0 ? g_dopt_mon : g_ud_release ? g_uds.monitor : 0;
     g_disp.cw_req = g_dopt_cw ? g_dopt_cw : g_ud_release ? g_uds.window_w : 1280; g_disp.ch_req = g_dopt_ch ? g_dopt_ch : g_ud_release ? g_uds.window_h : 720;
     if (g_ud_release && g_uds.have_pos == 3 && !g_dopt_cw && g_dopt_mon < 0) { g_disp.have_pos = 1; g_disp.px = g_uds.win_x; g_disp.py = g_uds.win_y; }
@@ -520,7 +607,7 @@ static void disp_setup(int replay) {
     if (g_disp.sim_w) { say("display: TEST --sim-monitor: as if the monitor were "); say_dec(g_disp.sim_w); say("x"); say_dec(g_disp.sim_h); say("\n"); }
     int ow = g_disp.out_w, oh = g_disp.out_h, pw, ph;
     if ((i64)ow * 9 > (i64)oh * 16) { ph = oh; pw = (int)(((i64)oh * 16 + 4) / 9); } else { pw = ow; ph = (int)(((i64)ow * 9 + 8) / 16); }
-    say("display: "); say(g_disp.borderless ? "borderless on monitor " : "windowed on monitor "); say_dec(g_disp.mon + 1); say(", "); say_dec(ow); say("x"); say_dec(oh);
+    say("display: "); say(g_disp.fullscreen ? "fullscreen on monitor " : g_disp.borderless ? "borderless on monitor " : "windowed on monitor "); say_dec(g_disp.mon + 1); say(", "); say_dec(ow); say("x"); say_dec(oh);
     say(", picture area "); say_dec(pw); say("x"); say_dec(ph); say(pw < ow ? " (pillarbox: black bars left and right)" : ph < oh ? " (letterbox: black bars above and below)" : " (the whole of it)"); say("\n");
     if (forced) { say("display: internal resolution from --render-scale "); say_dec(g_rs_pct); say(" (developer switch)\n"); return; }
     int th = ph; if (rr_mode == 2) th = rr_h < (rr_w * 9 + 8) / 16 ? rr_h : (rr_w * 9 + 8) / 16;

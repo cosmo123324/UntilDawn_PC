@@ -1848,7 +1848,8 @@ static void skp_img_probe(u64 *P, u32 id) {
         XboxPrompt *entry = &g_xbox_textures[i];
         if (!ud_key_is(name, entry->name)) continue;
         mv_lock();
-        if (!entry->texture && (dump_readable(g[14], 48) || plat_readable(g[14], 48))) {
+        u32 needed = entry->button >= XBOX_LB ? entry->size : 48;
+        if (!entry->texture && (dump_readable(g[14], needed) || plat_readable(g[14], needed))) {
             entry->texture = xbox_make_texture((const u8 *)g[14], entry->size, entry->button);
             if (entry->texture) { say("  Xbox prompt: "); say(entry->name); say("\n"); }
         }
@@ -3478,27 +3479,19 @@ static int ud_player_start(int *pargc, char ***pargv, int interactive) {
     ud_load_settings(cfg);
     if (g_uds.game_dir[0]) { int n = str_len(g_uds.game_dir); mem_copy(game, g_uds.game_dir, (u64)n + 1); }
     else path_join(game, base, "Game");
-    say("Until Dawn v" UD_VERSION " - native PC build, started "); say(__DATE__ " " __TIME__); say("\nprogram folder: "); say(base); say("\ngame folder: "); say(game); say("\n");
-    static char mb[4096]; UdMsg msg = {mb, 0, sizeof mb}; mb[0] = 0;
-    u64 t0 = plat_ticks();
-    int bad = ud_validate(game, &msg);
-    say("game files checked in "); say_dec((i64)((plat_ticks() - t0) * 1000 / plat_ticks_per_sec())); say(" ms: ");
-    if (bad) {
-        say("NOT USABLE\n"); say(mb); say("\n");
-        um(&msg, "\n\nThe game folder can be changed in Config\\settings.ini (game_dir). Details: Logs\\UntilDawn.log");
-        plat_message_box("Until Dawn - game files required", mb);
-        return 10 + bad;
-    }
-    say("ok ("); say(ud_game_title_id()); say(" 01.03, ");
-    say_dec((i64)(g_ud_common_count + g_ud_profile->file_count)); say(" files)\n");
-    if (interactive && g_uds.show_launcher) {
-        int picked = ud_prelaunch(g_uds.lod_distance);
-        if (!picked) return -1;
-        if (picked != g_uds.lod_distance) {
-            char setting[24];
-            fmt_dec(setting, picked);
-            ud_ini_set("lod_distance", setting, 0);
-            g_uds.lod_distance = picked;
+    say("Until Dawn v" UD_VERSION " - native PC build, started "); say(__DATE__ " " __TIME__);
+    say("\nprogram folder: "); say(base); say("\n");
+    int picked = interactive && g_uds.show_launcher ? ud_prelaunch(game) : -1;
+    if (!picked) return -1;
+    if (picked < 0) {
+        static char mb[4096];
+        UdMsg msg = {mb, 0, sizeof mb};
+        mb[0] = 0;
+        int bad = ud_check_game(game, &msg);
+        if (bad) {
+            um(&msg, "\n\nThe game folder can be changed in Config\\settings.ini (game_dir). Details: Logs\\UntilDawn.log");
+            plat_message_box("Until Dawn - game files required", mb);
+            return 10 + bad;
         }
     }
     if (g_uds.disp_auto) g_dopt_on = 1;   /* w6_disp: OFF unless the settings ask for it (or --display-auto) */
@@ -3535,7 +3528,7 @@ static int ud_player_start(int *pargc, char ***pargv, int interactive) {
     say(", Optimised Rendering (Fast Mode) "); say(g_uds.fast_render ? "on" : "off (optimised_rendering = 0)");
     say(", GPU optimisations "); say(g_uds.gpu_opt ? "on" : "off (gpu_optimisations = 0)");
     say(", display system "); say(g_uds.disp_auto ? "on" : "off (display_system = off)");
-    say(", display "); say(g_uds.borderless ? "borderless" : "windowed"); say(", developer mode "); say(g_uds.developer ? "on" : "off");
+    say(", display "); say(g_uds.fullscreen ? "fullscreen" : g_uds.borderless ? "borderless" : "windowed"); say(", developer mode "); say(g_uds.developer ? "on" : "off");
     say(", renderer thread "); say(g_uds.renderer_thread ? "on" : "off (renderer_thread = 0)");
     say(", gpu coherence "); say(g_uds.gpu_coherence ? "on" : "off (gpu_coherence = 0)"); say(", halloween hunt "); say(g_uds.halloween_hunt ? "on" : "off");
     say(", gpu "); say(g_uds.gpu[0] ? g_uds.gpu : "auto"); say(", present mode "); say(g_uds.present_mode == 1 ? "fifo" : g_uds.present_mode == 2 ? "mailbox" : g_uds.present_mode == 3 ? "immediate" : "auto"); say("\n");
@@ -4251,6 +4244,14 @@ int e3_main(int argc, char **argv) {
         plat_exit(r);
     }
     if (!g_game_dir) { plat_write(0, "usage: e5_loader <game_dir containing eboot.bin> [--main] [--timeout seconds] [--frames N] [--dump N] [--dump-frames a,b,c] [--no-window] [--shot N] [--no-cull]\n"); return 2; }
+#ifdef _WIN32
+    if (!plat_tls_alloc_disp()) {
+        const char *error = "Windows did not provide an inline thread-local storage slot for the game.";
+        say(error); say("\n");
+        if (g_ud_release) plat_message_box("Until Dawn", error);
+        return 2;
+    }
+#endif
     if (!g_ud_profile) ud_detect_game_profile(g_game_dir);
     pm_init(&g_log_lock);
     g_trace = plat_open_write(g_ud_release ? "Logs/os_calls.txt" : "e3_trace.txt");

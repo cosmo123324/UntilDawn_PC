@@ -19,6 +19,10 @@ DialogBoxIndirectParamW
 EndDialog
 GetDlgItemInt
 SetDlgItemInt
+GetDlgItemTextW
+SetDlgItemTextW
+SendDlgItemMessageW
+SendMessageW
 GetSystemMetrics
 SetProcessDPIAware
 AdjustWindowRect
@@ -34,3 +38,6 @@ GetMonitorInfoA
 MonitorFromWindow
 SetWindowPos
 SetWindowLongPtrA
+GetForegroundWindow
+EnumDisplaySettingsExA
+ChangeDisplaySettingsExA
