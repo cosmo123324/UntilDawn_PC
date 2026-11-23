@@ -29,51 +29,99 @@ static int ud_resolution_count = 10;
 static char *ud_launcher_game;
 #include "ud_launcher_art.c"
 
-typedef int (WINAPI *UdBrowseProc)(void *, u32, i64, i64);
-static int WINAPI ud_browse_start(void *window, u32 msg, i64 ignored, i64 path) {
-    (void)ignored;
-    if (msg == 1 && path) SendMessageW(window, 0x467 /* BFFM_SETSELECTIONW */, 1, path);
-    return 0;
+static int ud_launcher_has_game(void) {
+    char eboot[1120];
+    path_join(eboot, ud_launcher_game, "eboot.bin");
+    return plat_file_size(eboot) > 0;
 }
 
+typedef struct { u32 data1; u16 data2, data3; u8 data4[8]; } UdGuid;
+typedef struct UdShellItem UdShellItem;
+typedef struct UdFileDialog UdFileDialog;
+
+struct UdShellItem {
+    const struct {
+        void *query_interface, *add_ref;
+        u32 (WINAPI *release)(UdShellItem *);
+        void *bind_to_handler, *get_parent;
+        i32 (WINAPI *get_display_name)(UdShellItem *, u32, u16 **);
+    } *api;
+};
+
+struct UdFileDialog {
+    const struct {
+        void *query_interface, *add_ref;
+        u32 (WINAPI *release)(UdFileDialog *);
+        i32 (WINAPI *show)(UdFileDialog *, void *);
+        void *set_file_types, *set_file_type_index, *get_file_type_index, *advise, *unadvise;
+        i32 (WINAPI *set_options)(UdFileDialog *, u32);
+        i32 (WINAPI *get_options)(UdFileDialog *, u32 *);
+        void *set_default_folder;
+        i32 (WINAPI *set_folder)(UdFileDialog *, UdShellItem *);
+        void *get_folder, *get_current_selection, *set_file_name, *get_file_name;
+        i32 (WINAPI *set_title)(UdFileDialog *, const u16 *);
+        i32 (WINAPI *set_ok_label)(UdFileDialog *, const u16 *);
+        void *set_file_name_label;
+        i32 (WINAPI *get_result)(UdFileDialog *, UdShellItem **);
+    } *api;
+};
+
 static void ud_browse_folder(void *window) {
-    typedef struct {
-        void *owner;
-        const void *root;
-        u16 *name;
-        const u16 *title;
-        u32 flags;
-        UdBrowseProc callback;
-        i64 param;
-        int image;
-    } BrowseInfo;
+    static const UdGuid clsid = {0xdc1c5a9c, 0xe88a, 0x4dde, {0xa5,0xa1,0x60,0xf8,0x2a,0x20,0xae,0xf7}};
+    static const UdGuid iid = {0xd57c7288, 0xd4ad, 0x4768, {0xbe,0x02,0x9d,0x96,0x95,0x32,0xd9,0x60}};
+    static const UdGuid item_iid = {0x43826d1e, 0xe718, 0x42ee, {0xbc,0x55,0xa1,0xe2,0x61,0xc3,0x7b,0xfe}};
     static void *shell, *ole;
     if (!shell) shell = LoadLibraryA("shell32.dll");
     if (!ole) ole = LoadLibraryA("ole32.dll");
     if (!shell || !ole) return;
-    void *(WINAPI *browse)(BrowseInfo *) = (void *)GetProcAddress(shell, "SHBrowseForFolderW");
-    int (WINAPI *get_path)(const void *, u16 *, u32, u32) = (void *)GetProcAddress(shell, "SHGetPathFromIDListEx");
     i32 (WINAPI *init)(void *, u32) = (void *)GetProcAddress(ole, "CoInitializeEx");
     void (WINAPI *uninit)(void) = (void *)GetProcAddress(ole, "CoUninitialize");
-    void (WINAPI *release)(void *) = (void *)GetProcAddress(ole, "CoTaskMemFree");
-    if (!browse || !get_path || !init || !uninit || !release || init(0, 2) < 0) {
+    void (WINAPI *free_name)(void *) = (void *)GetProcAddress(ole, "CoTaskMemFree");
+    i32 (WINAPI *create)(const UdGuid *, void *, u32, const UdGuid *, void **) =
+        (void *)GetProcAddress(ole, "CoCreateInstance");
+    i32 (WINAPI *folder_item)(const u16 *, void *, const UdGuid *, void **) =
+        (void *)GetProcAddress(shell, "SHCreateItemFromParsingName");
+    if (!init || !uninit || !free_name || !create || init(0, 2 /* COINIT_APARTMENTTHREADED */) < 0) {
         MessageBoxA(window, "Digite o caminho no campo Pasta do jogo.", "Until Dawn", 0x10);
         return;
     }
-    u16 name[260];
-    static u16 path[1024], current[1024];
+
+    UdFileDialog *dialog = 0;
+    if (create(&clsid, 0, 1 /* CLSCTX_INPROC_SERVER */, &iid, (void **)&dialog) < 0) {
+        uninit();
+        MessageBoxA(window, "O seletor de pastas do Windows est\xe1 indispon\xedvel.", "Until Dawn", 0x10);
+        return;
+    }
+    u32 options = 0;
+    dialog->api->get_options(dialog, &options);
+    enum { PICK_FOLDERS = 0x20, FORCE_FILE_SYSTEM = 0x40, PATH_MUST_EXIST = 0x800, DO_NOT_ADD_TO_RECENT = 0x02000000 };
+    dialog->api->set_options(dialog, options | PICK_FOLDERS | FORCE_FILE_SYSTEM | PATH_MUST_EXIST | DO_NOT_ADD_TO_RECENT);
+    dialog->api->set_title(dialog, u"Selecione a pasta que contém eboot.bin");
+    dialog->api->set_ok_label(dialog, u"Selecionar pasta");
+
+    static u16 current[1024];
     GetDlgItemTextW(window, UD_PATH, current, sizeof current / sizeof current[0]);
     for (u16 *c = current; *c; c++) if (*c == '/') *c = '\\';
-    BrowseInfo info = {window, 0, name, u"Selecione a pasta que contém eboot.bin.", 0x41,
-                       ud_browse_start, (i64)current, 0};
-    void *item = browse(&info);
-    if (item) {
-        if (get_path(item, path, sizeof path / sizeof path[0], 0)) {
-            SetDlgItemTextW(window, UD_PATH, path);
-            ud_art_refresh(window);
-        } else MessageBoxA(window, "O caminho da pasta selecionada \xe9 longo demais.", "Until Dawn", 0x10);
-        release(item);
+    UdShellItem *item = 0;
+    if (folder_item && current[0] && folder_item(current, 0, &item_iid, (void **)&item) >= 0) {
+        dialog->api->set_folder(dialog, item);
+        item->api->release(item);
+        item = 0;
     }
+    if (dialog->api->show(dialog, window) >= 0 && dialog->api->get_result(dialog, &item) >= 0) {
+        u16 *path = 0;
+        if (item->api->get_display_name(item, 0x80058000u /* SIGDN_FILESYSPATH */, &path) >= 0) {
+            u32 n = 0;
+            while (n < 1023 && path[n]) n++;
+            if (n < 1023) {
+                SetDlgItemTextW(window, UD_PATH, path);
+                ud_art_refresh(window);
+            } else MessageBoxA(window, "O caminho da pasta selecionada \xe9 longo demais.", "Until Dawn", 0x10);
+            free_name(path);
+        }
+        item->api->release(item);
+    }
+    dialog->api->release(dialog);
     uninit();
 }
 
@@ -126,8 +174,9 @@ static void ud_resolution_label(void *window, UdResolution size, int automatic) 
 
 static void ud_launcher_init(void *window) {
     u16 path[1024];
-    if (MultiByteToWideChar(0, 0, ud_launcher_game, -1, path, sizeof path / sizeof path[0]))
+    if (g_uds.game_dir[0] && MultiByteToWideChar(0, 0, ud_launcher_game, -1, path, sizeof path / sizeof path[0]))
         SetDlgItemTextW(window, UD_PATH, path);
+    SendDlgItemMessageW(window, UD_PATH, 0x1501 /* EM_SETCUEBANNER */, 0, (i64)u"Escolha a pasta do jogo");
     ud_combo_add(window, UD_PROMPTS, u"PlayStation 4");
     ud_combo_add(window, UD_PROMPTS, u"Xbox");
     SendDlgItemMessageW(window, UD_PROMPTS, UD_SELECT, g_uds.xbox_prompts, 0);
@@ -149,7 +198,7 @@ static void ud_launcher_init(void *window) {
     ud_combo_add(window, UD_DISPLAY, u"Tela cheia");
     int display = g_uds.fullscreen ? 2 : g_uds.seen_mode ? g_uds.borderless : 1;
     SendDlgItemMessageW(window, UD_DISPLAY, UD_SELECT, display, 0);
-    ud_combo_add(window, UD_PRESENT, u"Manter a imagem inteira");
+    ud_combo_add(window, UD_PRESENT, u"Imagem inteira (pode ter barras)");
     ud_combo_add(window, UD_PRESENT, u"Preencher (corte nas bordas)");
     SendDlgItemMessageW(window, UD_PRESENT, UD_SELECT, g_uds.fill, 0);
     SetDlgItemInt(window, UD_LOD, g_uds.lod_distance, 0);
@@ -172,7 +221,13 @@ static int ud_launcher_apply(void *window) {
     char game[sizeof g_uds.game_dir - 16];
     u32 count = GetDlgItemTextW(window, UD_PATH, path, sizeof path / sizeof path[0]);
     int replaced = 0, utf8 = GetACP() == 65001;
-    if (!count || count == sizeof path / sizeof path[0] - 1 ||
+    if (!count && !g_uds.game_dir[0] && ud_launcher_has_game() &&
+        str_len(ud_launcher_game) < (int)sizeof game) {
+        mem_copy(game, ud_launcher_game, str_len(ud_launcher_game) + 1);
+    } else if (!count) {
+        ud_browse_folder(window);
+        return 0;
+    } else if (count == sizeof path / sizeof path[0] - 1 ||
         !WideCharToMultiByte(0, utf8 ? 0 : 0x400 /* WC_NO_BEST_FIT_CHARS */,
                              path, -1, game, sizeof game, 0, utf8 ? 0 : &replaced) || replaced) {
         MessageBoxA(window, "Selecione uma pasta do jogo com um caminho v\xe1lido.", "Until Dawn", 0x10);
@@ -227,7 +282,7 @@ static i64 WINAPI ud_prelaunch_event(void *window, u32 msg, u64 wp, i64 value) {
         ud_launcher_init(window);
         ud_art_refresh(window);
         SendMessageW(window, 0x401 /* DM_SETDEFID */, UD_OK, 0);
-        int control = plat_is_dir(ud_launcher_game) ? UD_OK : UD_BROWSE;
+        int control = ud_launcher_has_game() ? UD_OK : UD_BROWSE;
         SetFocus(GetDlgItem(window, control));
         return 0;  /* Focus was set explicitly. */
     }

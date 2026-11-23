@@ -44,13 +44,15 @@ cp "$ROOT/data/pipelines.udm" "$D/pipelines.udm"
 python3 - "$ROOT/source/runtime/ud_launch.c" "$D/Config/settings.ini" <<'EOF'
 import re, sys
 s = open(sys.argv[1], encoding='utf-8').read()
-m = re.search(r'static const char \*k_ud_ini_default =\s*((?:"(?:[^"\\]|\\.)*"\s*)+);', s)
+m = re.search(r'static const char \*k_ud_ini_default =\s*(?:/\*[^\r\n]*\*/\s*)?((?:"(?:[^"\\]|\\.)*"\s*)+);', s)
 if not m: sys.exit('k_ud_ini_default not found in ud_launch.c')
 parts = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
 txt = ''.join(parts).encode().decode('unicode_escape')
+game_paths = re.findall(r'^[ \t]*game_dir[ \t]*=[ \t]*([^\r\n]*)', txt, re.MULTILINE)
+if game_paths != ['']: sys.exit('the release template must have one empty game_dir')
 open(sys.argv[2], 'w', newline='').write(txt)
 EOF
-printf 'Put the files of your own extracted Until Dawn (CUSA02636) with the 01.03 update here,\r\nor set game_dir in Config\\settings.ini. See README.txt.\r\n' > "$D/Game/PUT_YOUR_GAME_FILES_HERE.txt"
+printf 'Put your own extracted Until Dawn files (CUSA02636 or CUSA00359, update 01.03) here,\r\nor select the folder in the launcher. See README.txt.\r\n' > "$D/Game/PUT_YOUR_GAME_FILES_HERE.txt"
 cp "$ROOT/compat/run_compat.bat" "$ROOT/compat/README_COMPAT.txt" "$B/ud_compat.exe" "$D/compat/"
 
 # the current documentation (Markdown, as text files)

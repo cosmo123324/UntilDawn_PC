@@ -23,6 +23,7 @@ GetDlgItemTextW
 SetDlgItemTextW
 SendDlgItemMessageW
 SendMessageW
+PostMessageA
 GetDlgItem
 SetFocus
 GetSystemMetrics

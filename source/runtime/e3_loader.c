@@ -87,6 +87,7 @@ enum { XBOX_A, XBOX_B, XBOX_X, XBOX_Y, XBOX_LB, XBOX_RB, XBOX_RT };
 static u8 xbox_glyph_coverage(u32 button, u32 x, u32 y, u32 w, u32 h);
 static const char *ud_game_title_id(void);
 static int ud_game_language(void);
+static int ud_exit_menu_open(void);
 
 /* SELF -> segments. Returns 0 on success; fills m->ph and maps data. */
 static u8 *read_file(const char *path, u64 *size) { return (u8 *)plat_read_file(path, size); }
@@ -1595,6 +1596,7 @@ static void patch_sound_trace(Module *m) {
 #include "e6_skipprompt.c"
 #include "ud_xbox_prompts.c"
 #include "ud_xbox_text.c"
+#include "ud_exit_menu.c"
 #define SFI_MAX 64
 /* kind: 1 frontend, 2 MovieLegal, 3 VideoOverlayText, 4 Subtitles. t107j: host = the movie carries our prompt (it said so
    through DoTextLookup, or it is a host movie we changed); name = the movie file, from the component's resource */
@@ -1769,6 +1771,7 @@ static void sf_call_probe(u64 *P, u32 id) {
     if (g_sf_ours || !vis_ptr_ok(g[8]) || !vis_ptr_ok(g[9])) return;
     char t[64]; int n = 0; while (n < 63) { u8 c = 0; if (!atm_rd(g[9] + (u64)n, &c, 1) || !c || c < 32 || c > 126) break; t[n++] = (char)c; } t[n] = 0;
     if (n < 4) return;
+    if (str_eq(t, "ExitFrontend") || str_eq(t, "OutroFrontend")) ud_exit_hide(g[8]);
     int kind = (str_eq(t, "DoIntro") || str_eq(t, "IsDone")) ? 2 :
                (str_eq(t, "PreviouslyOn") || str_eq(t, "OnEnterGame") || str_eq(t, "OneYearLater") || str_has(t, "ButterflyTutorialText")) ? 3 :
                str_eq(t, "StartFrontend") ? 1 : (str_eq(t, "PushSubtitle") || str_eq(t, "FlushSubtitles")) ? 4 : 0;
@@ -1794,6 +1797,15 @@ static void sf_load_probe(u64 *P, u32 id) {
     (void)id; u64 f = P[32 + 9]; if (!vis_ptr_ok(f)) return;
     u64 data = atm_q(f + 0x18), len = atm_q(f + 0x20);
     int swapped = 0;
+    if (g_ud_release && len == UD_EXIT_FRONTEND_SIZE && vis_ptr_ok(data) &&
+        (dump_readable(data, len) || plat_readable(data, len))) {
+        u32 new_length = 0;
+        const u8 *movie = ud_exit_prepare((const u8 *)data, (u32)len, &new_length);
+        if (movie) {
+            *(u64 *)(f + 0x18) = (u64)movie;
+            *(u64 *)(f + 0x20) = new_length;
+        }
+    }
     if (skp_is_host_len(len) && vis_ptr_ok(data) && (dump_readable(data, len) || plat_readable(data, len)) && atm_b(data) == 'G' && atm_b(data + 1) == 'F' && atm_b(data + 2) == 'X') {
         u32 nl = 0; const u8 *nm = skp_prepare((const u8 *)data, (u32)len, &nl);
         if (nm) { *(u64 *)(f + 0x18) = (u64)nm; *(u64 *)(f + 0x20) = nl; swapped = 1; }
@@ -1812,6 +1824,13 @@ static void sf_lookup_probe(u64 *P, u32 id) {
     u32 ty = (u32)atm_q(v + 0x18); if ((ty & 0x8f) == 1) return;
     u64 a = v + 0x20; if (ty & 0x40) a = atm_q(a); u64 sp = atm_q(a);
     char t[200]; if (!vis_is_str(sp, t, sizeof t)) return;
+    if (__atomic_load_n(&ud_exit_frontend, __ATOMIC_ACQUIRE)) {
+        u64 owner = P[32 + 9];
+        if (str_starts(t, "UDDesktopExitOn ")) ud_exit_show(owner, t + sizeof "UDDesktopExitOn " - 1);
+        else if (str_eq(t, "UDDesktopExitOff")) ud_exit_hide(owner);
+        else if (str_eq(t, "UDDesktopExit") && owner && owner == __atomic_load_n(&ud_exit_owner, __ATOMIC_ACQUIRE))
+            ud_exit_request();
+    }
     int ours = t[0] == 'U' && t[1] == 'D' && t[2] == 'L' && t[3] == 'O' && t[4] == 'G';
     if (ours) { say("  skip prompt (in the movie): "); say(t + 6); say("\n"); }
     /* t107j: "UDLOG host <file>" comes from our prompt as its movie starts; rsi = the component instance (this handler
@@ -1881,6 +1900,9 @@ static void patch_movies(Module *m) {
       } else say("  skip prompt: the picture opener does not match this eboot - the Cross button will be missing\n"); }
     if (m->base[0x14e2290] == 0x55 && m->base[0x14e2294] == 0x41 && m->base[0x14e2295] == 0x57) {
         s = m->base + 0x14e2290; st = g_stub_w; g_stub_w = probe_emit_stub(g_stub_w, 4, e2, 6, s + 6, (void *)&sf_lookup_probe); s[0] = 0xe9; *(i32 *)(s + 1) = (i32)(st - (s + 5)); s[5] = 0x90; }
+#ifdef _WIN32
+    if (g_ud_release) g_on_window_click = ud_exit_click;
+#endif
     say(g_opt_trace_movies ? "  movie calls on (STATUS 86), with the movie trace -> captures\\movie_trace.txt\n" : "  movie calls on (STATUS 86)\n");
 }
 static void patch_skin_check(Module *m) {
@@ -4301,7 +4323,7 @@ int e3_main(int argc, char **argv) {
     patch_heap_slots(&g_eboot);   /* t130 */
     patch_heap_slot_reuse(&g_eboot);   /* t131 */
     if (!g_opt_no_movie_skip) patch_movie_skip(&g_eboot);
-    if (!g_opt_no_movie_skip || g_opt_trace_movies || g_opt_xbox_prompts) patch_movies(&g_eboot);
+    if (g_ud_release || !g_opt_no_movie_skip || g_opt_trace_movies || g_opt_xbox_prompts) patch_movies(&g_eboot);
     if (g_opt_xbox_prompts) patch_xbox_text(&g_eboot);
     if (g_opt_trace_ui) patch_ui_trace(&g_eboot);
     if (g_opt_trace_sound) patch_sound_trace(&g_eboot);   /* t132 */

@@ -187,6 +187,8 @@ Double-click **`UntilDawn.exe`**.
 - **Launcher.** Choose the extracted game folder, PlayStation 4 or Xbox prompts, resolution, window mode,
   picture framing and experimental detail distance. The launcher reads the cover art from the selected game's
   own folder. Press Jogar to save those choices and start the game.
+- **Folder selection.** Procurar opens the Windows Explorer folder picker. The address bar accepts a pasted
+  path. Choose the folder that contains `eboot.bin`. A fresh installation shows an empty path field.
 - **Display.** Choose a framed window, a borderless window at the desktop resolution, or fullscreen with a
   temporary monitor mode. Alt+Enter switches between a window and the selected full-screen mode. The picture
   is rendered at 16:9. Select fit to keep the whole image, or fill to crop its edges to the size of the window.
@@ -200,7 +202,7 @@ The program creates these folders next to `UntilDawn.exe` when it runs:
 | `Logs\` | `UntilDawn.log` for the current session, the logs of the last five sessions, and diagnostic files in `Logs\captures\`. |
 | `temp0\` | The game's temporary data. |
 
-To quit, close the game window.
+Choose Sair (Quit) in the title or pause menu to close the game.
 
 ---
 

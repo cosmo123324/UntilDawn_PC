@@ -192,9 +192,9 @@ static SYSV int pad_read_state(int h, u8 *d) {
         static int mwas; int m = PAD_FOCUS && plat_key('M');
         if (m && !mwas) { g_mouse_aim = !g_mouse_aim; g_aim_vx = g_aim_vy = 0; say(g_mouse_aim ? "  mouse aiming on (M to turn off)\n" : "  mouse aiming off\n"); }
         mwas = m;
-        if (!PAD_FOCUS) plat_mouse_capture(0);
-        else plat_mouse_capture(g_mouse_aim);
-        if (g_mouse_aim && PAD_FOCUS) {
+        int aim = g_mouse_aim && PAD_FOCUS && !ud_exit_menu_open();
+        plat_mouse_capture(aim);
+        if (aim) {
             i32 dx, dy; plat_mouse_delta(&dx, &dy);
             g_aim_vx = g_aim_vx * 0.5f + (float)dx * g_mouse_sens; g_aim_vy = g_aim_vy * 0.5f + (float)dy * g_mouse_sens;
             float vx = g_aim_vx < -127 ? -127 : g_aim_vx > 127 ? 127 : g_aim_vx, vy = g_aim_vy < -127 ? -127 : g_aim_vy > 127 ? 127 : g_aim_vy;

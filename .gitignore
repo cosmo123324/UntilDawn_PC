@@ -81,6 +81,7 @@ UDAWNDLC*/
 
 # Files the program creates when it runs
 Config/
+settings.ini
 Logs/
 Cache/
 savedata/

@@ -936,11 +936,19 @@ static void plat_mkdir(const char *p) { if (!lp_long(p)) { CreateDirectoryA(p, 0
 typedef struct { volatile const u8 *pixels; volatile u32 w, h, pitch, linear; char lines[8][128]; volatile int nlines; volatile int open; volatile int focused; void *volatile hwnd, *volatile hinst; volatile int gdi_off; } PlatWin;
 static PlatWin g_win;
 static void (*g_on_window_close)(void);
+static int (*g_on_window_click)(void *, int, int, int);
+__declspec(dllimport) int WINAPI PostMessageA(void *, u32, u64, i64);
+static int plat_request_window_close(void) {
+    void *window = g_win.hwnd;
+    return window && PostMessageA(window, 0x0010 /* WM_CLOSE */, 0, 0);
+}
 static volatile int g_mcap_hide;   /* mouse aiming (e5_input_win.h): no pointer over the window */
 __declspec(dllimport) void *WINAPI SetCursor(void *);
 static int *g_disp_on_p; static volatile int *g_disp_toggle_p, *g_disp_refit_p;   /* w6_disp (g_disp is defined below) */
 static WINAPI i64 plat_wndproc(void *hw, u32 msg, u64 wp, i64 lp) {
     if (msg == 0x0010 /*WM_CLOSE*/) { if (g_on_window_close) g_on_window_close(); return 0; }
+    if ((msg == 0x0201 || msg == 0x0202) && g_on_window_click &&
+        g_on_window_click(hw, (short)lp, (short)(lp >> 16), msg == 0x0202)) return 0;
     if (msg == 0x0020 /*WM_SETCURSOR*/ && g_mcap_hide && (lp & 0xFFFF) == 1 /*HTCLIENT*/) { SetCursor(0); return 1; }
     if (msg == 0x0014 /*WM_ERASEBKGND*/) return 1;
     if (msg == 0x0007 /*WM_SETFOCUS*/) g_win.focused = 1;
@@ -1786,6 +1794,7 @@ static void plat_mkdir(const char *p) { mkdir(p, 0755); }
 typedef struct { volatile const u8 *pixels; volatile u32 w, h, pitch, linear; char lines[8][128]; volatile int nlines; volatile int open; volatile int focused; void *volatile hwnd, *volatile hinst; volatile int gdi_off; } PlatWin;
 static PlatWin g_win;
 static void (*g_on_window_close)(void);
+static int plat_request_window_close(void) { return 0; }
 static void plat_window_open(void) {}
 static void plat_win_report(void) {}
 typedef struct { void *h; i32 x, y, w, ht, wx, wy, ww, wh; int primary; char name[32]; } PlatMon;
